@@ -46,6 +46,16 @@ apk/kashikari.apk  … 作った Android アプリ
 tools/icons/       … アイコンを作り直す（bash tools/icons/make-icons.sh）
 ```
 
+### Firestore のルール（kashikari/firestore.rules）のしくみ
+
+コンソールに貼りやすいように、ファイルには説明を書かずに英数字だけにしています。中身は：
+
+- 帳簿（kashikari_books）：帳簿ID（招待コード）を知っているログイン中の人は、その帳簿を1つ見られる。一覧で見られるのは自分が参加している帳簿だけ。
+  参加は「自分を1人足して、自分の呼び名を入れる」ことだけできる。呼び名は自分の分だけ変えられる。帳簿の名前はつくった人だけが変えられる
+- 貸した記録（loans）：参加している人はみんな読める。書く・直す・消すのは貸した本人（lender）だけ。ほかの人に渡すこともできない
+- 返したよ（claims）：借りた人が自分の名前で出す（はじめは「確認待ち」）。「認める・断る」は貸した人だけで、1回決めたら変えられない。消せるのは出した人か貸した人
+- 自分だけの帳簿（kashikari_private/{uid}）：本人しか読めない・書けない
+
 ### データの置き場所（Firestore）
 
 ```
@@ -62,7 +72,9 @@ kashikari_private/{uid}/entries/{id}     自分だけの帳簿 { dir: lent|borro
    - Google を有効にした画面の「ウェブ SDK 構成」にある **ウェブ クライアント ID**（…apps.googleusercontent.com）を控える
    - Authentication → 設定 →「承認済みドメイン」に `susuruchachi.github.io` を足す
 3. **Firestore をつくる**：Firestore Database →「データベースの作成」（場所は asia-northeast1（東京）など・「本番環境モード」）
-   →「ルール」タブで、`kashikari/firestore.rules` をまるごと貼り付けて「公開」
+   →「ルール」タブで、書いてあるものを**ぜんぶ消してから**、`kashikari/firestore.rules` をまるごと貼り付けて「公開」
+   - 1行目が `rules_version = '2';` になっているか確かめる。メモ帳アプリなどを通すと `'` が `’`（曲がった引用符）に変わって「Line 1: Parse error」になることがある。
+     いちばん確実なのは、パソコンで https://raw.githubusercontent.com/susuruchachi/susuru-obenri-tools/main/kashikari/firestore.rules を開いて全部コピーすること
 4. **ウェブアプリを登録する**：⚙️ プロジェクトの設定 →「マイアプリ」→ ウェブ（</>）→ 名前を入れて登録 → 出てくる `firebaseConfig` を
    `kashikari/firebase-config.js` の `config` に、2. で控えたウェブ クライアント ID を `webClientId` に入れる
 5. **GitHub Pages を有効にする**：このリポジトリの Settings → Pages → Branch を `main`・`/ (root)` にして Save
