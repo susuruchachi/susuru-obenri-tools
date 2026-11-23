@@ -213,6 +213,14 @@ fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width:
 .apk-banner button { background: var(--ink-deep); color: var(--parchment); border: 0; border-radius: 8px; padding: 7px 12px; font-weight: 600; font-size: .8rem; white-space: nowrap; }
 
 .foot { font-size: .75rem; color: var(--faint); text-align: center; line-height: 1.8; padding: 0 8px; }
+.foot a { color: var(--brass-bright); text-underline-offset: 3px; }
+
+/* Android アプリのダウンロード */
+.get-app { display: flex; align-items: center; gap: 10px; border: 1px solid var(--brass); background: var(--ink-panel); border-radius: 12px; padding: 10px 8px 10px 14px; }
+.get-app b { color: var(--brass-bright); font-size: .88rem; }
+.get-app p { font-size: .74rem; color: var(--parchment-dim); line-height: 1.6; }
+.get-app .btn { text-decoration: none; }
+.get-app .close { align-self: flex-start; }
 
 .toast {
   position: fixed; left: 50%; top: calc(14px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 40;

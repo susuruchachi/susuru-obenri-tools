@@ -1,6 +1,6 @@
 // Service Worker（アプリとしてインストールできるようにするのと、電波が無いときに画面だけでも開けるように）
 // 画面のファイルを変えたら CACHE_NAME の数を上げる（上げないと古い画面のままになることがある）
-const CACHE_NAME = 'kashikari-v2';
+const CACHE_NAME = 'kashikari-v3';
 const APP_SHELL = ['./', './index.html', './style.css', './firebase-config.js', './store.js', './ledger.js', './app-bridge.js', './app.js', './manifest.json', './icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
