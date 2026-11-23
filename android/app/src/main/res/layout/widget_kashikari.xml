@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 貸し借り帳のウィジェット：返ってくる予定・返す予定、相手ごとの差し引き、届いた「返したよ」。押すとアプリが開く -->
+<!-- 貸し借り帳のウィジェット：返ってくる予定・返す予定、相手ごとの差し引き、届いた「返したよ」。押すとアプリが開く
+     ★ ウィジェット（RemoteViews）で使える部品だけにする（LinearLayout・FrameLayout・TextView・ImageView など）。
+       すき間用の <View> などは使えず、使うとウィジェットが何も出なくなる -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/w_root"
     android:layout_width="match_parent"
@@ -27,8 +29,8 @@
                 android:text="—" android:textSize="18sp" android:textStyle="bold" android:textColor="#7FB69E"
                 android:fontFamily="monospace" android:maxLines="1" />
         </LinearLayout>
-        <View android:layout_width="8dp" android:layout_height="1dp" />
         <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
             android:orientation="vertical" android:background="@drawable/widget_cell" android:padding="8dp">
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:text="返す予定" android:textSize="10sp" android:textColor="#97A8B5" />
