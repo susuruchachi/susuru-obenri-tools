@@ -1,10 +1,9 @@
 rules_version = '2';
 // 貸し借り帳（susuru-obenri-tools/kashikari）の Firestore のルール
 //
-// ★ 入れ方：Firebase コンソール（susuruanki のプロジェクト）→ Firestore Database →「ルール」タブで、
-//    いまあるルールの「match /databases/{database}/documents {」の中に、
-//    下の「ここから」〜「ここまで」を【足して】から「公開」を押してください。
-//    いまあるルール（すするanki・航海日誌の分）を消したり、置きかえたりしないでください。
+// ★ 入れ方：Firebase コンソール（貸し借り帳のプロジェクト）→ Firestore Database →「ルール」タブで、
+//    書いてあるものをぜんぶ消して、このファイルをまるごと貼り付けて「公開」を押してください。
+//    （貸し借り帳だけのプロジェクトなので、ほかのアプリのルールは入っていません）
 service cloud.firestore {
   match /databases/{database}/documents {
 

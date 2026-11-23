@@ -224,12 +224,12 @@ public class MainActivity extends Activity {
         // 貸し借りの合計をウィジェットに渡す（app-bridge.js の kkBuildWidgetData の形）
         @JavascriptInterface public void setWidgetData(String json) { WidgetData.save(MainActivity.this, json); }
 
-        // Google でログイン：アカウントを選ぶ画面（Credential Manager）を出す
-        @JavascriptInterface public void googleSignIn() {
+        // Google でログイン：アカウントを選ぶ画面（Credential Manager）を出す。clientId はウェブ版（firebase-config.js）の webClientId
+        @JavascriptInterface public void googleSignIn(String clientId) {
             getSharedPreferences(LOGIN_PREFS, Context.MODE_PRIVATE).edit().remove("pending").apply();
             runOnUiThread(() -> {
                 try {
-                    GetSignInWithGoogleOption opt = new GetSignInWithGoogleOption.Builder(getString(R.string.webClientId)).build();
+                    GetSignInWithGoogleOption opt = new GetSignInWithGoogleOption.Builder(clientId == null ? "" : clientId).build();
                     GetCredentialRequest req = new GetCredentialRequest.Builder().addCredentialOption(opt).build();
                     CredentialManager.create(MainActivity.this).getCredentialAsync(MainActivity.this, req, new CancellationSignal(), bg,
                         new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {

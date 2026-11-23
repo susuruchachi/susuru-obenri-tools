@@ -14,6 +14,7 @@
 -->
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<script src="./firebase-config.js"></script>
 <style>
   :root { --ink: #131E29; --panel: #1D2E3D; --line: #3C5A6E; --brass: #C9A15C; --paper: #EDE6D2; --dim: #97A8B5; --danger: #E08A84; }
   html, body { margin: 0; background: var(--ink); color: var(--paper); font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
@@ -32,7 +33,7 @@
   <div class="card">
     <h1>⚓ 貸し借り帳にログイン</h1>
     <div id="step1">
-      <p>すするanki・航海日誌と同じ Google アカウントでログインします。ログインできたら、「アプリに戻る」を押してください。</p>
+      <p>貸し借り帳で使う Google アカウントでログインします。ログインできたら、「アプリに戻る」を押してください。</p>
       <button id="go" type="button">Google でログイン</button>
     </div>
     <div id="step2" class="hidden">
@@ -53,10 +54,13 @@
     errEl.textContent = 'このページは、貸し借り帳のアプリの「Google でログイン」から開いてください。';
     return;
   }
-  firebase.initializeApp({
-    apiKey: 'AIzaSyAGoYBRoupEFHng_cXoiHmZf9eAlX8ZCHA', authDomain: 'susuruanki.firebaseapp.com',
-    projectId: 'susuruanki', appId: '1:926791749187:web:2a96a39d61cbb4d3c7cef6',
-  });
+  const conf = (window.KASHIKARI_FIREBASE || {}).config || {};
+  if (!conf.apiKey) {
+    go.disabled = true;
+    errEl.textContent = 'Firebase の設定（firebase-config.js）がまだ入っていません。';
+    return;
+  }
+  firebase.initializeApp(conf);
   const auth = firebase.auth();
   // このページではログインを覚えておかない（トークンをアプリに渡すだけ）
   auth.setPersistence(firebase.auth.Auth.Persistence.NONE).catch(function () {});

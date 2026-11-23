@@ -17,7 +17,7 @@
 <meta name="apple-mobile-web-app-title" content="貸し借り帳" />
 
 <link rel="stylesheet" href="./style.css" />
-<!-- ログインとデータ（Firebase：すするanki・航海日誌と同じプロジェクト） -->
+<!-- ログインとデータ（Firebase：貸し借り帳だけのプロジェクト。設定は firebase-config.js） -->
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
@@ -61,7 +61,8 @@
 <div id="sheet"></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<!-- 読み込み順が依存関係：store → ledger → app-bridge → app -->
+<!-- 読み込み順が依存関係：firebase-config → store → ledger → app-bridge → app -->
+<script src="./firebase-config.js"></script>
 <script src="./store.js"></script>
 <script src="./ledger.js"></script>
 <script src="./app-bridge.js"></script>

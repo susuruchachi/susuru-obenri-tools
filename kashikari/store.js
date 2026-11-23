@@ -1,5 +1,5 @@
-// --- 貸し借り帳のデータ（Firebase：すするanki・航海日誌と同じプロジェクト）---
-// ・ログインは すするanki と同じアカウント（Google・メール）
+// --- 貸し借り帳のデータ（Firebase：貸し借り帳だけのプロジェクト。設定は firebase-config.js）---
+// ・ログインは Google かメール
 // ・みんなの帳簿：kashikari_books/{帳簿ID} = { name, owner, members: [uid], names: { uid: 呼び名 }, createdAt }
 //     帳簿ID を知っている人（招待リンク・招待コード）だけが中を見て、参加できる
 //   貸した記録：kashikari_books/{帳簿ID}/loans/{id} = { lender, title, date, memo, mode, total, includeSelf, shares: [{ to, amount, repayments: [{ id, date, amount, claim? }] }], createdAt, updatedAt }
@@ -9,18 +9,16 @@
 // ・自分だけの帳簿：kashikari_private/{uid}/entries/{id} = { dir: lent|borrowed, who, title, date, memo, amount, repayments, createdAt, updatedAt }（本人しか読めない）
 // ・オフラインで変えた分は、この端末に覚えておき（enablePersistence）、つながったら送る
 (function () {
-  const FIREBASE_CONFIG = {
-    apiKey: 'AIzaSyAGoYBRoupEFHng_cXoiHmZf9eAlX8ZCHA', authDomain: 'susuruanki.firebaseapp.com',
-    projectId: 'susuruanki', storageBucket: 'susuruanki.firebasestorage.app',
-    messagingSenderId: '926791749187', appId: '1:926791749187:web:2a96a39d61cbb4d3c7cef6',
-  };
+  const SETTINGS = window.KASHIKARI_FIREBASE || {};
+  const FIREBASE_CONFIG = SETTINGS.config || {};
+  const WEB_CLIENT_ID = SETTINGS.webClientId || '';
   const BOOKS = 'kashikari_books', PRIVATE = 'kashikari_private';
 
   let auth = null, db = null, user = null;
   let booksUnsub = null, privUnsub = null;
   const bookSubs = {}; // 帳簿ID -> [unsub, unsub]
   const st = {
-    available: false, authReady: false, user: null, error: '',
+    available: false, configMissing: !(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId), authReady: false, user: null, error: '',
     online: typeof navigator === 'undefined' || navigator.onLine !== false, pending: false,
     booksReady: false, books: [], loans: {}, claims: {}, privateReady: false, personal: [],
   };
@@ -151,7 +149,7 @@
   window.__kashikariLoginArrived = takeNativeLogin;
 
   function init() {
-    if (!window.firebase || !firebase.initializeApp) { st.authReady = true; emit(); return; }
+    if (st.configMissing || !window.firebase || !firebase.initializeApp) { st.authReady = true; emit(); return; }
     try {
       if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
       auth = firebase.auth(); db = firebase.firestore();
@@ -182,7 +180,11 @@
     async signInGoogle() {
       if (!auth) throw new Error('Firebase を読み込めませんでした');
       if (window.KashikariApp && window.KashikariApp.googleSignIn) {
-        return new Promise((resolve, reject) => { window.__kashikariNativeLogin = { resolve, reject }; window.KashikariApp.googleSignIn(); });
+        if (!WEB_CLIENT_ID) {
+          const e = new Error('アプリの「Google でログイン」がまだ設定されていません（firebase-config.js の webClientId）。「ブラウザでログイン」かメールでログインしてください');
+          e.code = 'app/no-client-id'; throw e;
+        }
+        return new Promise((resolve, reject) => { window.__kashikariNativeLogin = { resolve, reject }; window.KashikariApp.googleSignIn(WEB_CLIENT_ID); });
       }
       const p = new firebase.auth.GoogleAuthProvider();
       p.setCustomParameters({ prompt: 'select_account' });

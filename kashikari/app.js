@@ -110,6 +110,7 @@
   };
 
   function viewMain() {
+    if (S.configMissing) return `<section class="sec"><h2 class="sec-title"><span class="mark">⚙️</span> まだ準備中です</h2><p class="hint">Firebase の設定（kashikari/firebase-config.js）がまだ入っていません。入れると使えるようになります。</p></section>`;
     if (!S.available && S.authReady) return `<section class="sec"><p class="hint">Firebase を読み込めませんでした。電波のよいところで開き直してください。</p></section>`;
     if (!S.authReady) return `<section class="sec"><p class="empty">読み込み中…</p></section>`;
     if (!S.user) return viewLogin();
@@ -121,7 +122,7 @@
     const L = U.login;
     return `<section class="sec">
       <h2 class="sec-title"><span class="mark">⚓</span> ログインして使います</h2>
-      <p class="hint">すするanki・航海日誌と同じアカウント（Google・メール）でログインします。記録は、同じアカウントのほかの端末（スマホ・パソコン・Android アプリ）にも届きます。</p>
+      <p class="hint">Google かメールでログインします。記録は、同じアカウントのほかの端末（スマホ・パソコン・Android アプリ）にも届きます。</p>
       ${U.pendingJoin ? `<p class="hint" style="color:var(--brass-bright)">招待された帳簿があります。ログインすると参加できます。</p>` : ''}
       <button class="btn primary wide" data-act="login-google" ${L.busy ? 'disabled' : ''}>Google でログイン</button>
       ${KStore.canBrowserSignIn() ? `<div class="row end"><button class="btn link" data-act="login-browser">うまくいかないとき：ブラウザでログイン</button></div>` : ''}
