@@ -1,0 +1,45 @@
+// すするアプリ（Android のランチャー）：すするanki・航海日誌・すする帳簿の Android アプリを、1つのところから開く
+// 3つのアプリはそれぞれ今まで通り（データ・ウィジェット・自動更新もそれぞれ）。このアプリは開くだけなので、作り直すことはほとんど無い
+// 作り直すときは versionCode を1つ上げる
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.susuruchachi.susurulauncher'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'io.github.susuruchachi.susurulauncher'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        release {
+            // 署名鍵は環境変数で渡す（GitHub Actions では、貸し借り帳と同じ Secrets の KASHIKARI_KEYSTORE_B64 / KASHIKARI_KEYSTORE_PASSWORD）。
+            // 無ければデバッグ用の鍵で署名する（中にデータは無いので、鍵が変わったらアンインストールして入れ直せばよい）
+            def ks = System.getenv('LAUNCHER_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('LAUNCHER_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('LAUNCHER_KEY_ALIAS') ?: 'kashikari'
+                keyPassword System.getenv('LAUNCHER_KEY_PASSWORD') ?: System.getenv('LAUNCHER_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('LAUNCHER_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

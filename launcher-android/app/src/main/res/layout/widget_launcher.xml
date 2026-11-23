@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ウィジェット：3つのアプリのアイコンと名前を横に並べる（押すとそのアプリ。入っていなければランチャーの画面） -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:gravity="center"
+    android:padding="6dp"
+    android:background="@drawable/widget_bg">
+    <LinearLayout android:id="@+id/w_cell_0" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:orientation="vertical" android:gravity="center">
+        <ImageView android:id="@+id/w_icon_0" android:layout_width="34dp" android:layout_height="34dp" android:src="@drawable/ic_launcher" android:importantForAccessibility="no" />
+        <TextView android:id="@+id/w_name_0" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp"
+            android:textColor="@color/parchment" android:textSize="11sp" android:maxLines="1" android:text="@string/scAnki" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/w_cell_1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:orientation="vertical" android:gravity="center">
+        <ImageView android:id="@+id/w_icon_1" android:layout_width="34dp" android:layout_height="34dp" android:src="@drawable/ic_launcher" android:importantForAccessibility="no" />
+        <TextView android:id="@+id/w_name_1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp"
+            android:textColor="@color/parchment" android:textSize="11sp" android:maxLines="1" android:text="@string/scKoukai" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/w_cell_2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+        android:orientation="vertical" android:gravity="center">
+        <ImageView android:id="@+id/w_icon_2" android:layout_width="34dp" android:layout_height="34dp" android:src="@drawable/ic_launcher" android:importantForAccessibility="no" />
+        <TextView android:id="@+id/w_name_2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp"
+            android:textColor="@color/parchment" android:textSize="11sp" android:maxLines="1" android:text="@string/scKashikari" />
+    </LinearLayout>
+</LinearLayout>
