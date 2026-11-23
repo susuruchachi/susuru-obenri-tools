@@ -70,23 +70,44 @@ public class ApkUpdater {
     static long myVersion() { return BuildConfig.VERSION_CODE; }
     static boolean ready(Context ctx) { return readyVersion(ctx) > myVersion(); }
 
-    // ダウンロード（同じ版がもうあれば何もしない）。失敗したら false
+    // ---- うまくいかなかったことを覚えておく（ウェブ版の「アプリと更新」の画面に出す。1.3.0 から）----
+    static final String PREFS = "kashikari_update";
+    static void fail(Context ctx, String msg) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("error", msg).putLong("errorAt", System.currentTimeMillis()).apply();
+    }
+    static void clearFail(Context ctx) { ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove("error").remove("errorAt").apply(); }
+
+    // ダウンロード（同じ版がもうあれば何もしない）。失敗したら false（理由は fail で覚える）
     static boolean download(Context ctx, String url, long wantCode) {
-        if (wantCode > 0 && readyVersion(ctx) >= wantCode) return true;
+        if (wantCode > 0 && readyVersion(ctx) >= wantCode) { clearFail(ctx); return true; }
         File tmp = new File(apkFile(ctx).getParentFile(), "download.tmp");
         try {
             HttpURLConnection c = (HttpURLConnection) new URL(url + (url.contains("?") ? "&" : "?") + "v=" + wantCode).openConnection();
             c.setConnectTimeout(20000); c.setReadTimeout(60000); c.setUseCaches(false);
-            try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(tmp)) {
-                byte[] buf = new byte[65536]; int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            try {
+                int code = c.getResponseCode();
+                if (code != 200) { fail(ctx, "サイトから受け取れませんでした（HTTP " + code + "）"); return false; }
+                try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(tmp)) {
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
             } finally { c.disconnect(); }
             File f = apkFile(ctx);
             if (f.exists()) f.delete();
-            if (!tmp.renameTo(f)) return false;
+            if (!tmp.renameTo(f)) { fail(ctx, "ダウンロードしたものを置けませんでした（端末の空きが少ないかも）"); return false; }
             // サイトの配信に古い APK が残っていることがある（10分ほど）。欲しい版でなければ、次に開いたときにもう一度
-            return ready(ctx) && (wantCode <= 0 || readyVersion(ctx) >= wantCode);
-        } catch (Exception e) { tmp.delete(); return false; }
+            if (!(ready(ctx) && (wantCode <= 0 || readyVersion(ctx) >= wantCode))) {
+                fail(ctx, readyVersion(ctx) == 0 ? "ダウンロードしたものが、このアプリの APK ではありませんでした"
+                    : "サイトにまだ古い版が残っていました（10分ほどすると新しい版になります。あとで「更新を確認する」を）");
+                return false;
+            }
+            clearFail(ctx);
+            return true;
+        } catch (Exception e) {
+            tmp.delete();
+            fail(ctx, "ダウンロードできませんでした（" + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : "：" + e.getMessage()) + "）");
+            return false;
+        }
     }
 
     // 確認なしで入れられるか（Android 12 以上で、このアプリを入れたのがこのアプリ自身・提供元の許可あり）
@@ -124,6 +145,10 @@ public class ApkUpdater {
                 s.commit(PendingIntent.getBroadcast(ctx, 3, i, flags).getIntentSender());
             }
             return true;
-        } catch (Exception e) { installing = false; return false; }
+        } catch (Exception e) {
+            installing = false;
+            fail(ctx, "入れ替えを始められませんでした（" + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : "：" + e.getMessage()) + "）");
+            return false;
+        }
     }
 }

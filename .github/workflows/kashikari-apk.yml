@@ -1,7 +1,8 @@
 # 貸し借り帳の Android アプリ（APK）を作る（手動で実行：Actions → kashikari-apk → Run workflow）
 # 中身はウェブ版（kashikari/）をそのまま表示するので、作り直すのはアプリ本体（android/：ウィジェットなど）を変えたときだけで大丈夫です。
 # 作り直すときは、android/app/build.gradle の versionCode を1つ上げてから実行します。
-# 作った APK を apk/kashikari.apk に置き、kashikari/app-bridge.js の ANDROID_APK_CODE を同じ数にすると、入っているアプリが自動で更新されます。
+# 作った APK を apk/kashikari.apk に置き、kashikari/app-bridge.js の ANDROID_APK_CODE と apk/version.json を同じ版にすると、入っているアプリが自動で更新されます。
+# apk/version.json の notes（新しい版で変わったこと）は、作る前に手で書いておく（「⚙️ アプリと更新」の画面に出る）。
 # 署名鍵：Secrets に KASHIKARI_KEYSTORE_B64（.jks を base64 にしたもの）と KASHIKARI_KEYSTORE_PASSWORD を入れておく
 #        （無いときは使い捨ての鍵で署名するので、前のアプリを一度アンインストールしないと上書きできません。そのときは apk/ に置きません）
 name: kashikari-apk
@@ -55,8 +56,11 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk apk/kashikari.apk
           CODE=$(sed -n 's/^ *versionCode \([0-9]*\).*/\1/p' android/app/build.gradle)
           sed -i "s/^const ANDROID_APK_CODE = [0-9]*;/const ANDROID_APK_CODE = $CODE;/" kashikari/app-bridge.js
+          NAME=$(sed -n "s/^ *versionName '\\(.*\\)'.*/\\1/p" android/app/build.gradle)
+          # apk/version.json（「アプリと更新」の画面が読む）の版と日付も合わせる。notes（変わったこと）は手で書いたものをそのまま使う
+          python3 -c "import json,sys,datetime;p='apk/version.json';j=json.load(open(p));j.update(code=int(sys.argv[1]),name=sys.argv[2],date=datetime.date.today().isoformat());json.dump(j,open(p,'w'),ensure_ascii=False,indent=2)" "$CODE" "$NAME"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apk/kashikari.apk kashikari/app-bridge.js
+          git add apk/kashikari.apk apk/version.json kashikari/app-bridge.js
           git commit -m "貸し借り帳の APK（versionCode $CODE）を置いて、アプリを自動で更新させる" || echo "変更なし"
           git push

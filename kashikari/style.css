@@ -283,3 +283,16 @@ fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width:
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: .74rem; color: var(--parchment-dim); align-items: center; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .btn.danger.primary, button.btn.danger[type=submit] { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* 上の帯のボタン（⚙️ アプリと更新・☁️ ログイン） */
+.head-btns { display: flex; gap: 6px; align-items: center; }
+#appBtn { position: relative; }
+#appBtn .dot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--brass-bright); border: 2px solid var(--ink-panel); }
+/* アプリと更新 */
+.vers { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.vers .bal .num { font-size: 1.05rem; color: var(--parchment); }
+.upd-state { border-radius: 10px; padding: 9px 12px; font-size: .85rem; line-height: 1.7; border: 1px solid var(--chart-line); background: var(--ink-deep); }
+.upd-state.ok { border-color: color-mix(in srgb, var(--signal) 60%, transparent); color: var(--signal); }
+.upd-state.new { border-color: var(--brass); color: var(--brass-bright); }
+.upd-state.bad { border-color: var(--danger); color: var(--danger-text); }
+.notes { margin: 0; padding-left: 1.2em; font-size: .8rem; color: var(--parchment-dim); line-height: 1.8; }
