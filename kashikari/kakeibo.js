@@ -277,7 +277,7 @@ const Kakeibo = (ctx) => {
     </section>
     <section class="sec">
       <h2 class="sec-title"><span class="mark">💾</span> 書き出し（CSV）</h2>
-      <p class="hint">Excel や Google スプレッドシートで開けます。${window.KashikariApp ? 'アプリでは「ダウンロード」フォルダーに保存します。' : ''}</p>
+      <p class="hint">Excel や Google スプレッドシートで開けます。${window.KashikariApp ? (/KashikariIOS/.test(navigator.userAgent) ? 'アプリでは共有の画面が出るので、「"ファイル"に保存」などを選んでください。' : 'アプリでは「ダウンロード」フォルダーに保存します。') : ''}</p>
       <div class="row"><button class="btn small" data-act="kb-csv" data-v="tx">家計簿を書き出す</button><button class="btn small" data-act="kb-csv" data-v="lend">自分の貸し借りを書き出す</button></div>
     </section>`;
   }

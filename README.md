@@ -9,6 +9,7 @@
 
 - ウェブ版：https://susuruchachi.github.io/susuru-obenri-tools/kashikari/ （GitHub Pages を main で有効にすると開けます）
 - Android アプリ：`apk/kashikari.apk`（ホーム画面のウィジェット付き）
+- iOS・iPadOS：すするanki の iOS アプリ（ランチャー「すするアプリ」）の中に「すする帳簿」として入っている（ウィジェット付き）。アプリの中では Android アプリと同じ `window.KashikariApp`（setWidgetData・saveFile・googleSignIn・takeLogin）が使える（UA に `KashikariIOS/版`）。Google のログインは `app-login.html#state=…&ios=1` を iOS のログインの画面で開き、`susuruanki://auth?…` で戻る
 
 ### できること
 
