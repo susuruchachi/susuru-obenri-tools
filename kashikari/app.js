@@ -95,6 +95,7 @@
       <button role="tab" data-act="tab" data-v="shared" aria-selected="${U.tab === 'shared'}">👪 みんなの帳簿${waiting ? `<span class="badge">${waiting}</span>` : ''}</button>
       <button role="tab" data-act="tab" data-v="personal" aria-selected="${U.tab === 'personal'}">📒 自分の帳簿</button>`;
     $('#apk').hidden = !(U.apk.ready && !U.apk.silent && kkAppOutdated());
+    $('#appDot').hidden = !kkAppOutdated();
     $('#main').innerHTML = viewMain();
     if (f) { const el = document.getElementById(f.id); if (el) { el.focus(); try { if (f.s != null) el.setSelectionRange(f.s, f.e); } catch (e) {} } }
     kkApkSetIdle(!U.sheet && !U.repay && !U.claimForm);
@@ -422,7 +423,7 @@
     const box = $('#sheet');
     if (!U.sheet) { box.innerHTML = ''; return; }
     const k = U.sheet.sheetKind;
-    const title = KB.has(k) ? KB.title(k) : { delbook: '帳簿を消す', leavebook: '帳簿から抜ける', newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
+    const title = KB.has(k) ? KB.title(k) : { appinfo: '⚙️ アプリと更新', delbook: '帳簿を消す', leavebook: '帳簿から抜ける', newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
     box.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title" data-form="sheet">
       <div class="sheet-head"><h2 id="sh-title">${title}</h2><button type="button" class="close" data-act="sheet-close" aria-label="閉じる">×</button></div>
       ${KB.has(k) ? KB.sheetBody(k) : sheetBody(k)}
@@ -472,6 +473,7 @@
       <p class="hint">${S.online ? (S.pending ? '☁️ 送信中…（つながったら送ります）' : '☁️ 同期中：ほかの端末にもすぐ届きます') : '📴 オフライン：書いたものはこの端末に覚えておき、つながったら送ります'}</p>
       ${S.error ? `<p class="err">⚠️ ${esc(S.error)}</p>` : ''}
       <div class="row end"><button type="button" class="btn danger" data-act="logout">ログアウト</button></div>`;
+    if (k === 'appinfo') return appInfoBody();
     if (k === 'delbook') return `
       <p class="hint">「${esc(b.name)}」と、中の記録（${loansOf(b).length}件）・返したよを<b>ぜんぶ消します</b>。参加しているみんなの画面からも消えて、もとに戻せません。</p>
       <p class="hint">消すときは、下に帳簿の名前「${esc(b.name)}」を打ってください。</p>
@@ -652,6 +654,48 @@
     }
   }
 
+  // 「⚙️ アプリと更新」：いまの版・いちばん新しい版・更新を確認する・更新する・うまくいかなかった理由
+  function appInfoBody() {
+    const I = kkApkInfo(), L = I.latest, st = I.status || {};
+    const when = (t) => { if (!t) return ''; const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
+    const vname = (name, code) => (name ? `${esc(name)}` : '') + (code ? `<small class="faint">（${code}）</small>` : '');
+    const notes = L.notes.length ? `<div><p class="hint">${L.name ? esc(L.name) + ' で' : '新しい版で'}変わったこと</p><ul class="notes">${L.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>` : '';
+    const reload = `<div class="row"><button type="button" class="btn small" data-act="page-reload">画面を読み込み直す</button><span class="hint">画面（ウェブ版）が古いままのときに</span></div>`;
+    if (!I.inApp) {
+      return `<p class="hint">Android アプリ（ホーム画面のウィジェット付き）のいちばん新しい版です。</p>
+        <div class="vers"><div class="bal"><span class="label">いちばん新しい版</span><span class="num">${vname(L.name, L.code) || '…'}</span></div>
+          <div class="bal"><span class="label">確認した時刻</span><span class="num">${when(L.checkedAt) || '…'}</span></div></div>
+        ${L.error ? `<div class="upd-state bad">⚠️ ${esc(L.error)}</div>` : ''}
+        <div class="row"><a class="btn primary" href="${esc(ANDROID_APK_SELF_URL)}" download="kashikari.apk">📲 ダウンロード</a><button type="button" class="btn small" data-act="apk-check-web">もう一度確認</button></div>
+        ${notes}${reload}`;
+    }
+    const A = I.apk, cur = I.current || {};
+    let state, cls;
+    if (A.phase === 'checking') { state = '確認しています…'; cls = ''; }
+    else if (A.phase === 'downloading') { state = `📥 新しい版（${esc(L.name || L.code)}）をダウンロードしています…`; cls = 'new'; }
+    else if (A.phase === 'installing') { state = '📲 入れ替えています。確認の画面が出たら「更新」（またはインストール）を押してください。終わるとアプリが開き直します'; cls = 'new'; }
+    else if (A.phase === 'failed') { state = `⚠️ うまくいきませんでした：${esc(A.error)}`; cls = 'bad'; }
+    else if (I.outdated && (A.ready || st.ready >= L.code)) { state = A.silent || st.canSilent ? '✓ 新しい版をダウンロードしました。アプリを閉じて1分たつと自動で入れ替わります（いま「更新する」でもOK）' : '✓ 新しい版をダウンロードしました。「更新する」を押すと確認の画面が出ます'; cls = 'new'; }
+    else if (I.outdated) { state = `新しい版（${esc(L.name || L.code)}）があります。「更新する」を押してください`; cls = 'new'; }
+    else if (L.checkedAt) { state = '✦ いちばん新しい版です'; cls = 'ok'; }
+    else { state = '確認しています…'; cls = ''; }
+    const lastErr = st.error && A.phase !== 'failed' ? `<div class="upd-state bad">前にうまくいかなかったこと（${when(st.errorAt)}）：${esc(st.error)}<div class="row end"><button type="button" class="btn small" data-act="apk-clear">消す</button></div></div>` : '';
+    const perm = st.canInstall === false ? `<p class="hint">「この提供元のアプリを許可」がオフです。「更新する」を押すと設定の画面が開くので、オンにしてから戻ってもう一度押してください。</p>` : '';
+    const busy = A.phase === 'checking' || A.phase === 'downloading';
+    return `<div class="vers">
+        <div class="bal"><span class="label">いまのアプリ</span><span class="num">${vname(cur.name, cur.code) || '?'}</span></div>
+        <div class="bal"><span class="label">いちばん新しい版</span><span class="num">${vname(L.name, L.code)}</span></div>
+      </div>
+      <div class="upd-state ${cls}">${state}</div>
+      ${L.error ? `<p class="hint">${esc(L.error)}</p>` : ''}
+      ${lastErr}${perm}
+      <div class="row"><button type="button" class="btn" data-act="apk-check" ${busy ? 'disabled' : ''}>🔄 更新を確認する</button>
+        <button type="button" class="btn primary" data-act="apk-install" ${I.outdated && !busy ? '' : 'disabled'}>📲 更新する</button></div>
+      <p class="hint">ふだんは、アプリを開いたときに自動で確かめて、新しい版があればアプリを閉じたときに入れ替わります${L.checkedAt ? `（最後に確認：${when(L.checkedAt)}）` : ''}。</p>
+      <div class="row"><button type="button" class="btn link" data-act="apk-browser">うまくいかないとき：ブラウザでダウンロードして入れる</button></div>
+      ${notes}${reload}`;
+  }
+
   // 帳簿を消す（つくった人だけ）。閉じる → 中の記録を消す → 帳簿を消す。途中で止まっても、もう一度で続きから
   async function deleteBook() {
     const b = book(), X = U.sheet;
@@ -803,6 +847,11 @@
       }
       case 'confirm-no': U.confirm = null; break;
       case 'apk-install': kkInstallApk(); return;
+      case 'apk-check': kkCheckApkUpdate(true); return;
+      case 'apk-check-web': kkFetchLatest(); return;
+      case 'apk-browser': kkOpenApkInBrowser(); return;
+      case 'apk-clear': try { window.KashikariApp.apkClearError(); } catch (e) {} drawSheet(); return;
+      case 'page-reload': location.reload(); return;
       case 'leave-yes': { const b = book(); if (b) { run(KStore.leaveBook(b.id), `「${b.name}」から抜けました`); U.bookId = ''; store('kashikari-book', null); } closeSheet(); return; }
       case 'delbook-go': deleteBook(); return;
       default: { const r = KB.click(a, d); if (r === 'render') break; return; }
@@ -824,7 +873,7 @@
     else { U.tab = 'shared'; U.sub = 'summary'; const p = pendingForMe()[0]; if (p) U.bookId = p.b.id; }
     window.scrollTo(0, 0); render();
   };
-  window.addEventListener('kashikari-apk', (e) => { U.apk = e.detail || {}; render(); });
+  window.addEventListener('kashikari-apk', (e) => { U.apk = e.detail || {}; render(); if (U.sheet && U.sheet.sheetKind === 'appinfo') drawSheet(); });
 
   // ---------- データが変わったら ----------
   let joinAsked = false;
@@ -844,6 +893,7 @@
     KB.fillRecurring();
     kkSendWidget(S);
   });
+  $('#appBtn').addEventListener('click', () => { openSheet('appinfo'); kkFetchLatest(); });
   $('#syncBtn').addEventListener('click', () => { if (S.user) openSheet('account'); else { U.tab = 'shared'; render(); } });
   $('#apk').addEventListener('click', (e) => { if (e.target.closest('button')) kkInstallApk(); });
 })();

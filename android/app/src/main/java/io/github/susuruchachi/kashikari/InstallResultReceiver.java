@@ -34,10 +34,16 @@ public class InstallResultReceiver extends BroadcastReceiver {
             return;
         }
         ApkUpdater.installing = false;
-        if (status != PackageInstaller.STATUS_SUCCESS && foreground) {
-            String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-            if (status != PackageInstaller.STATUS_FAILURE_ABORTED)
-                Toast.makeText(ctx, "アプリを更新できませんでした" + (msg != null ? "（" + msg + "）" : ""), Toast.LENGTH_LONG).show();
-        }
+        if (status == PackageInstaller.STATUS_SUCCESS) { ApkUpdater.clearFail(ctx); return; }
+        String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+        // うまくいかなかった理由を覚えておく（ウェブ版の「アプリと更新」に出す）
+        String why = status == PackageInstaller.STATUS_FAILURE_ABORTED ? "入れ替えの確認で「キャンセル」されました"
+            : status == PackageInstaller.STATUS_FAILURE_CONFLICT ? "入っているアプリと署名がちがうので、上から入れられませんでした（一度アンインストールしてから入れてください）"
+            : status == PackageInstaller.STATUS_FAILURE_STORAGE ? "端末の空きが足りませんでした"
+            : status == PackageInstaller.STATUS_FAILURE_BLOCKED ? "端末の設定で入れ替えが止められました"
+            : "アプリを入れ替えられませんでした";
+        ApkUpdater.fail(ctx, why + (msg != null ? "（" + msg + "）" : ""));
+        if (foreground && status != PackageInstaller.STATUS_FAILURE_ABORTED)
+            Toast.makeText(ctx, "アプリを更新できませんでした" + (msg != null ? "（" + msg + "）" : ""), Toast.LENGTH_LONG).show();
     }
 }

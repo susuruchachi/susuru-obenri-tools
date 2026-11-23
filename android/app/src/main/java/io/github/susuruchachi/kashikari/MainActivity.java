@@ -299,6 +299,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface public boolean apkReady() { return ApkUpdater.ready(MainActivity.this); }
         @JavascriptInterface public void apkInstallNow() {
             if (!getPackageManager().canRequestPackageInstalls()) {
+                ApkUpdater.fail(MainActivity.this, "「この提供元のアプリを許可」がオフでした。オンにしてから、もう一度「更新する」を押してください");
                 toast("「この提供元のアプリを許可」をオンにしてから、もう一度「更新する」を押してください");
                 try { startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); } catch (Exception e) {}
                 return;
@@ -306,6 +307,21 @@ public class MainActivity extends Activity {
             bg.execute(() -> { if (!ApkUpdater.install(getApplicationContext())) toast("更新を始められませんでした"); });
         }
         @JavascriptInterface public void apkSetIdle(boolean idle) { jsIdle = idle; }
+        // 更新のようす（1.3.0 から）：{ ready: ダウンロード済みの版, installing, canInstall: 提供元の許可, canSilent, error, errorAt }
+        @JavascriptInterface public String apkStatus() {
+            JSONObject o = new JSONObject();
+            try {
+                android.content.SharedPreferences p = getSharedPreferences(ApkUpdater.PREFS, MODE_PRIVATE);
+                o.put("ready", ApkUpdater.readyVersion(MainActivity.this));
+                o.put("installing", ApkUpdater.installing);
+                o.put("canInstall", getPackageManager().canRequestPackageInstalls());
+                o.put("canSilent", ApkUpdater.canSilent(MainActivity.this));
+                o.put("error", p.getString("error", ""));
+                o.put("errorAt", p.getLong("errorAt", 0));
+            } catch (Exception ignored) {}
+            return o.toString();
+        }
+        @JavascriptInterface public void apkClearError() { ApkUpdater.clearFail(MainActivity.this); }
 
         // ファイルを「ダウンロード」フォルダーに保存する（家計簿の CSV の書き出し。WebView ではブラウザのダウンロードが動かないため）
         @JavascriptInterface public boolean saveFile(String name, String mime, String base64) {

@@ -114,9 +114,13 @@ firebase-config.js が空のあいだは、ページに「⚙️ まだ準備中
   使うウェブ クライアント ID は firebase-config.js から受け取るので、Firebase を変えても APK は作り直さなくてよい
 - つながらないときは「📴 つながりません」の画面に「もう一度ためす」
 - 家計簿の CSV の書き出しは「ダウンロード」フォルダーに保存（1.2.0 から）
+- **⚙️ アプリと更新**（上の帯の ⚙️。新しい版があると印が付く・1.3.0 から）：いまの版といちばん新しい版、「🔄 更新を確認する」「📲 更新する」、
+  ダウンロード中・入れ替え中などのようす、うまくいかなかった理由（ダウンロードできなかった・署名がちがう・提供元の許可がオフ など。アプリが覚えておく）、
+  「うまくいかないとき：ブラウザでダウンロードして入れる」、「画面を読み込み直す」。ブラウザで開いたときは、いちばん新しい版とダウンロード
+  - いちばん新しい版は `apk/version.json`（`{ code, name, date, notes }`）を毎回読んで調べる。`notes`（変わったこと）は APK を作る前に手で書く
 - **自動更新**：アプリを開いたとき、`kashikari/app-bridge.js` の `ANDROID_APK_CODE` が入っているアプリより新しければ、
   このサイトの `apk/kashikari.apk` を裏でダウンロードして入れ替える（はじめの1回だけ確認が出る。航海日誌と同じしくみ）
 - **作り直すとき**（android/ を変えたときだけ）：`android/app/build.gradle` の `versionCode` を1つ上げて、GitHub の Actions →「kashikari-apk」→ Run workflow。
-  署名鍵を Secrets（`KASHIKARI_KEYSTORE_B64`・`KASHIKARI_KEYSTORE_PASSWORD`）に入れておくと、APK を `apk/kashikari.apk` に置き、`ANDROID_APK_CODE` も同じ数にする
+  署名鍵を Secrets（`KASHIKARI_KEYSTORE_B64`・`KASHIKARI_KEYSTORE_PASSWORD`）に入れておくと、APK を `apk/kashikari.apk` に置き、`ANDROID_APK_CODE` と `apk/version.json` も同じ版にする（先にウィジェットのテスト `gradle testReleaseUnitTest` も走る）
   （署名鍵は、いまの APK と同じものを使わないと、入っているアプリの上から入れられない）
 - 手元で作るとき：`cd android && gradle assembleRelease`（Android SDK と JDK 17 以上。`KASHIKARI_KEYSTORE`・`KASHIKARI_KEYSTORE_PASSWORD` で署名鍵を渡す）

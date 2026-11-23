@@ -5,13 +5,35 @@
 // 依存: ledger.js
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。作り直したら上げる）
-const ANDROID_APK_CODE = 4;
+const ANDROID_APK_CODE = 5;
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/susuru-obenri-tools/raw/main/apk/kashikari.apk';
 const ANDROID_APK_SELF_URL = new URL('../apk/kashikari.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
+// いちばん新しい版の情報（{ code, name, date, notes }）。「更新を確認する」で毎回読む（古い画面が残っていても正しくわかるように）
+const ANDROID_VERSION_URL = new URL('../apk/version.json', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
 
 function kkIsApp() { return !!(window.KashikariApp && window.KashikariApp.setWidgetData); }
+// 入っているアプリの版（アプリの外では null）
+function kkAppVersion() {
+  try { return kkIsApp() ? { code: window.KashikariApp.versionCode ? window.KashikariApp.versionCode() : 0, name: window.KashikariApp.version ? window.KashikariApp.version() : '' } : null; } catch (e) { return null; }
+}
+let kkLatest = { code: ANDROID_APK_CODE, name: '', date: '', notes: [], checkedAt: 0, error: '' };
 function kkAppOutdated() {
-  try { return kkIsApp() && window.KashikariApp.versionCode && window.KashikariApp.versionCode() < ANDROID_APK_CODE; } catch (e) { return false; }
+  const v = kkAppVersion();
+  return !!(v && v.code && v.code < kkLatest.code);
+}
+// apk/version.json を読む（読めなくても ANDROID_APK_CODE で比べられる）
+async function kkFetchLatest() {
+  try {
+    const r = await fetch(ANDROID_VERSION_URL + '?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const code = Math.max(+j.code || 0, ANDROID_APK_CODE);
+    kkLatest = { code, name: +j.code === code ? String(j.name || '') : '', date: String(j.date || ''), notes: Array.isArray(j.notes) ? j.notes.map(String).slice(0, 10) : [], checkedAt: Date.now(), error: '' };
+  } catch (e) {
+    kkLatest = { ...kkLatest, checkedAt: Date.now(), error: '新しい版の情報を読めませんでした（' + (e.message || e) + '）' };
+  }
+  kkApkEmit();
+  return kkLatest;
 }
 
 // ウィジェットに渡すもの：
@@ -63,37 +85,59 @@ function kkStartView() {
   try { return new URLSearchParams(window.location.search).get('view') || ''; } catch (e) { return ''; }
 }
 
-// ---- アプリの自動更新（航海日誌と同じ）----
-let kkApk = { ready: false, silent: false, busy: false };
+// ---- アプリの自動更新（航海日誌と同じ）と、「アプリと更新」の画面（1.3.0 から）----
+// phase：idle（まだ）・checking（確認中）・downloading（ダウンロード中）・ready（入れ替えの準備ができた）・installing（入れ替え中）・failed（うまくいかなかった）
+let kkApk = { ready: false, silent: false, busy: false, phase: 'idle', error: '' };
 let _kkApkAsked = 0, _kkApkInstallAfter = false;
 function kkApkAuto() { return !!(window.KashikariApp && window.KashikariApp.apkPrepare); }
 function kkApkEmit() { try { window.dispatchEvent(new CustomEvent('kashikari-apk', { detail: { ...kkApk } })); } catch (e) {} }
-function kkCheckApkUpdate(force) {
-  if (!kkApkAuto() || !kkAppOutdated() || kkApk.busy) return;
+// アプリが覚えている更新のようす（1.3.0 から。前の版では null）
+function kkApkStatus() {
+  try { return window.KashikariApp && window.KashikariApp.apkStatus ? JSON.parse(window.KashikariApp.apkStatus()) : null; } catch (e) { return null; }
+}
+// 新しい版があるか確かめて、あればダウンロードする（force：4時間待たずに）
+async function kkCheckApkUpdate(force) {
+  if (!kkApkAuto() || kkApk.busy) return;
   if (!force && Date.now() - _kkApkAsked < 4 * 3600000) return;
   _kkApkAsked = Date.now();
-  kkApk.busy = true;
-  try { window.KashikariApp.apkPrepare(ANDROID_APK_SELF_URL, ANDROID_APK_CODE); } catch (e) { kkApk.busy = false; }
+  kkApk = { ...kkApk, busy: true, phase: 'checking', error: '' }; kkApkEmit();
+  await kkFetchLatest();
+  if (!kkAppOutdated()) { kkApk = { ...kkApk, busy: false, phase: 'idle' }; kkApkEmit(); return; }
+  kkApk = { ...kkApk, phase: 'downloading' }; kkApkEmit();
+  try { window.KashikariApp.apkPrepare(ANDROID_APK_SELF_URL, kkLatest.code); }
+  catch (e) { kkApk = { ...kkApk, busy: false, phase: 'failed', error: 'ダウンロードを始められませんでした' }; kkApkEmit(); }
 }
 window.__kashikariApkReady = function (ok, silent) {
-  kkApk = { ready: !!ok, silent: !!silent, busy: false };
-  if (ok && _kkApkInstallAfter) { _kkApkInstallAfter = false; window.KashikariApp.apkInstallNow(); }
+  const st = kkApkStatus();
+  kkApk = { ready: !!ok, silent: !!silent, busy: false, phase: ok ? 'ready' : 'failed', error: ok ? '' : ((st && st.error) || 'ダウンロードできませんでした。電波のよいところで「更新を確認する」を押してください') };
+  if (ok && _kkApkInstallAfter) { _kkApkInstallAfter = false; kkApk.phase = 'installing'; window.KashikariApp.apkInstallNow(); }
   kkApkEmit();
 };
+// 「更新する」：ダウンロード済みなら入れる（確認の画面が出る）。まだならダウンロードしてから
 function kkInstallApk() {
-  if (!kkApkAuto()) { window.open(ANDROID_APK_URL, '_blank'); return; }
+  if (!kkApkAuto()) { kkOpenApkInBrowser(); return; }
   try {
-    if (window.KashikariApp.apkReady()) window.KashikariApp.apkInstallNow();
+    if (window.KashikariApp.apkReady()) { kkApk = { ...kkApk, phase: 'installing', error: '' }; kkApkEmit(); window.KashikariApp.apkInstallNow(); setTimeout(kkApkRecheck, 4000); }
     else { _kkApkInstallAfter = true; kkCheckApkUpdate(true); }
   } catch (e) {}
+}
+// 入れ替えを頼んだあと、うまくいかなかったか（アプリが覚えている理由）を見直す
+function kkApkRecheck() {
+  const st = kkApkStatus();
+  if (st && st.error && kkApk.phase === 'installing') { kkApk = { ...kkApk, phase: 'failed', error: st.error }; kkApkEmit(); }
+}
+// うまくいかないとき：ブラウザで APK をダウンロードして、自分で入れる（アプリの外のブラウザで開く）
+function kkOpenApkInBrowser() { window.open(ANDROID_APK_URL, '_blank'); }
+// 「アプリと更新」の画面に出すもの
+function kkApkInfo() {
+  return { inApp: kkIsApp(), auto: kkApkAuto(), current: kkAppVersion(), latest: { ...kkLatest }, outdated: kkAppOutdated(), apk: { ...kkApk }, status: kkApkStatus() };
 }
 // 書いている途中は、裏に回っても入れ替えない
 function kkApkSetIdle(idle) { try { if (window.KashikariApp && window.KashikariApp.apkSetIdle) window.KashikariApp.apkSetIdle(!!idle); } catch (e) {} }
 if (kkApkAuto()) {
   setTimeout(() => kkCheckApkUpdate(false), 3000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') kkCheckApkUpdate(false); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { kkCheckApkUpdate(false); kkApkRecheck(); } });
 }
-
 // ---- Android アプリのダウンロード（ブラウザで開いたときだけ）----
 // Android の端末では上に大きく出す（×で閉じると、この端末では次から下の小さいリンクだけ）。ほかの端末では下に小さく
 (function () {
