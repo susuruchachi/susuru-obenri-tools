@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 貸し借り帳の Android アプリ：ウェブ版を WebView で表示し、ホーム画面のウィジェットを持つ -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 新しい APK を、アプリの中から上書きインストールする（自動更新。初めてのときだけ「この提供元のアプリを許可」を聞かれる） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/appName"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/appName"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- ブラウザで Google にログインしたあと「アプリに戻る」で戻ってくる（app-login.html → kashikari://auth） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="kashikari" android:host="auth" />
+            </intent-filter>
+        </activity>
+
+        <!-- ホーム画面のウィジェット：返ってくる予定・返す予定・相手ごと・届いた「返したよ」 -->
+        <receiver android:name=".KashikariWidget" android:exported="false" android:label="@string/widgetName">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_kashikari_info" />
+        </receiver>
+        <!-- アプリの自動更新（入れた結果・閉じて1分後に起こす） -->
+        <receiver android:name=".InstallResultReceiver" android:exported="false" />
+    </application>
+</manifest>

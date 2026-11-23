@@ -1,0 +1,62 @@
+# 貸し借り帳の Android アプリ（APK）を作る（手動で実行：Actions → kashikari-apk → Run workflow）
+# 中身はウェブ版（kashikari/）をそのまま表示するので、作り直すのはアプリ本体（android/：ウィジェットなど）を変えたときだけで大丈夫です。
+# 作り直すときは、android/app/build.gradle の versionCode を1つ上げてから実行します。
+# 作った APK を apk/kashikari.apk に置き、kashikari/app-bridge.js の ANDROID_APK_CODE を同じ数にすると、入っているアプリが自動で更新されます。
+# 署名鍵：Secrets に KASHIKARI_KEYSTORE_B64（.jks を base64 にしたもの）と KASHIKARI_KEYSTORE_PASSWORD を入れておく
+#        （無いときは使い捨ての鍵で署名するので、前のアプリを一度アンインストールしないと上書きできません。そのときは apk/ に置きません）
+name: kashikari-apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '作った APK を apk/kashikari.apk に置いて、入っているアプリを自動で更新させる（ANDROID_APK_CODE を上げる）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Use the preinstalled Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "sdk.dir=$SDK" > android/local.properties
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Prepare keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KASHIKARI_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"; echo "KASHIKARI_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"; else echo "署名鍵が無いので使い捨ての鍵で署名します"; fi
+      - name: Build APK
+        working-directory: android
+        env:
+          KASHIKARI_KEYSTORE_PASSWORD: ${{ secrets.KASHIKARI_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kashikari-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+      - name: Publish APK to the branch
+        if: ${{ inputs.publish && env.KASHIKARI_KEYSTORE != '' }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk apk/kashikari.apk
+          CODE=$(sed -n 's/^ *versionCode \([0-9]*\).*/\1/p' android/app/build.gradle)
+          sed -i "s/^const ANDROID_APK_CODE = [0-9]*;/const ANDROID_APK_CODE = $CODE;/" kashikari/app-bridge.js
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apk/kashikari.apk kashikari/app-bridge.js
+          git commit -m "貸し借り帳の APK（versionCode $CODE）を置いて、アプリを自動で更新させる" || echo "変更なし"
+          git push

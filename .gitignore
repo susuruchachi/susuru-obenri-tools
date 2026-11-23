@@ -1,0 +1,9 @@
+# Android のビルドで作られるもの
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
+# 署名鍵（リポジトリに入れない）
+*.jks
+*.keystore
