@@ -90,3 +90,20 @@ if (kkApkAuto()) {
   setTimeout(() => kkCheckApkUpdate(false), 3000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') kkCheckApkUpdate(false); });
 }
+
+// ---- Android アプリのダウンロード（ブラウザで開いたときだけ）----
+// Android の端末では上に大きく出す（×で閉じると、この端末では次から下の小さいリンクだけ）。ほかの端末では下に小さく
+(function () {
+  if (kkIsApp()) return;
+  const card = document.getElementById('getApp'), foot = document.getElementById('getAppFoot');
+  if (!card || !foot) return;
+  let closed = false;
+  try { closed = localStorage.getItem('kashikari-getapp-closed') === '1'; } catch (e) {}
+  const android = /Android/i.test(navigator.userAgent || '');
+  card.hidden = !(android && !closed);
+  foot.hidden = !card.hidden;
+  document.getElementById('getAppClose').addEventListener('click', () => {
+    try { localStorage.setItem('kashikari-getapp-closed', '1'); } catch (e) {}
+    card.hidden = true; foot.hidden = false;
+  });
+})();

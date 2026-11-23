@@ -29,6 +29,16 @@
     <button type="button">更新する</button>
   </div>
 
+  <!-- Android アプリのダウンロード（アプリの中では出さない。Android の端末では上に大きく、ほかでは下に小さく） -->
+  <div id="getApp" class="get-app" hidden>
+    <div class="grow">
+      <b>📲 Android アプリ（ウィジェット付き）</b>
+      <p>ダウンロードしたら開いて「インストール」。「提供元不明のアプリ」を聞かれたら許可してください。</p>
+    </div>
+    <a class="btn primary" id="getAppLink" href="../apk/kashikari.apk" download="kashikari.apk">ダウンロード</a>
+    <button type="button" class="close" id="getAppClose" aria-label="閉じる">×</button>
+  </div>
+
   <div class="ship">
     <header class="head">
       <svg class="compass-mark" width="150" height="150" viewBox="0 0 100 100" aria-hidden="true">
@@ -57,6 +67,7 @@
   </div>
 
   <p class="foot">貸した記録を書けるのは、貸した本人だけ。<br>借りた人は「返したよ」で知らせて、貸した人が認めると返済に入ります。</p>
+  <p class="foot" id="getAppFoot" hidden><a href="../apk/kashikari.apk" download="kashikari.apk">📲 Android アプリ（APK）をダウンロード</a></p>
 </div>
 <div id="sheet"></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
