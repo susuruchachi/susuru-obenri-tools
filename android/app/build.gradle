@@ -1,0 +1,71 @@
+// 貸し借り帳の Android アプリ（WebView 版。航海日誌のアプリと同じしくみ）
+// 中身はウェブ版（GitHub Pages の kashikari/）を Android の内蔵部品（Android System WebView）で表示する。
+// 画面の中身はウェブ版を更新すれば自動で新しくなる。APK を作り直すのは、このフォルダー（ウィジェットなど）を変えたときだけ。
+// 作り直すときは versionCode を1つ上げる。kashikari/app-bridge.js の ANDROID_APK_CODE も同じ数にすると、入っているアプリが自動で更新される
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.susuruchachi.kashikari'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'io.github.susuruchachi.kashikari'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+
+        def host = 'susuruchachi.github.io'
+        def path = '/susuru-obenri-tools/'
+        resValue 'string', 'appName', '貸し借り帳'
+        resValue 'string', 'widgetName', '貸し借り帳'
+        resValue 'string', 'widgetDescription', '返ってくる予定・返す予定と、届いた「返したよ」'
+        resValue 'string', 'launchUrl', "https://${host}${path}kashikari/?source=app"
+        resValue 'string', 'loginUrl', "https://${host}${path}kashikari/app-login.html"
+        resValue 'string', 'hostName', host
+        resValue 'string', 'pathPrefix', path
+        // Google ログイン（アカウントを選ぶ画面）に使う、Firebase プロジェクト（susuruanki）の「ウェブ クライアント ID」（秘密ではない。すするanki・航海日誌と同じ）
+        // ★ Firebase に、このアプリ（io.github.susuruchachi.kashikari）と署名の SHA-1 を Android アプリとして登録しておかないと、Google に断られる
+        //    （そのときはブラウザでのログイン（app-login.html）を使う）
+        resValue 'string', 'webClientId', '926791749187-pq139a7m09tnp8pupfineqp8ibruhu9v.apps.googleusercontent.com'
+    }
+
+    signingConfigs {
+        release {
+            // 署名鍵は環境変数で渡す（GitHub Actions では Secrets の KASHIKARI_KEYSTORE_B64 / KASHIKARI_KEYSTORE_PASSWORD から）。
+            // 無ければデバッグ用の鍵で署名する（その APK は、前に入れたアプリの上から入れ直せない）
+            def ks = System.getenv('KASHIKARI_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('KASHIKARI_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KASHIKARI_KEY_ALIAS') ?: 'kashikari'
+                keyPassword System.getenv('KASHIKARI_KEY_PASSWORD') ?: System.getenv('KASHIKARI_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('KASHIKARI_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.credentials:credentials:1.3.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.3.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
+}
