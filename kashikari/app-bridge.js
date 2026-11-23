@@ -5,7 +5,7 @@
 // 依存: ledger.js
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。作り直したら上げる）
-const ANDROID_APK_CODE = 2;
+const ANDROID_APK_CODE = 4;
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/susuru-obenri-tools/raw/main/apk/kashikari.apk';
 const ANDROID_APK_SELF_URL = new URL('../apk/kashikari.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
 
@@ -37,7 +37,10 @@ function kkBuildWidgetData(st) {
     if (x.net) lines.push({ n: '📒 ' + x.who, d: x.net > 0 ? 'in' : 'out', a: Math.abs(x.net) });
   });
   lines.sort((a, b) => b.a - a.a);
-  return { signedIn: true, inSum, outSum, lines: lines.slice(0, 8), claims, today: KL.today(), at: Date.now() };
+  // 家計簿：今月の支出・収入・予算（{ m: 月, exp, inc, budget } か null）
+  let kb = null;
+  try { kb = window.__kkKbWidget ? window.__kkKbWidget() : null; } catch (e) {}
+  return { signedIn: true, inSum, outSum, lines: lines.slice(0, 8), claims, kb, today: KL.today(), at: Date.now() };
 }
 
 let _kkWidgetTimer = null, _kkWidgetLast = '';

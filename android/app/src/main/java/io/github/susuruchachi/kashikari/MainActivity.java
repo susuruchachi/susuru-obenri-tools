@@ -11,12 +11,16 @@ package io.github.susuruchachi.kashikari;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.CancellationSignal;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.util.Base64;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
@@ -43,6 +47,9 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
 
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.security.SecureRandom;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -299,5 +306,27 @@ public class MainActivity extends Activity {
             bg.execute(() -> { if (!ApkUpdater.install(getApplicationContext())) toast("更新を始められませんでした"); });
         }
         @JavascriptInterface public void apkSetIdle(boolean idle) { jsIdle = idle; }
+
+        // ファイルを「ダウンロード」フォルダーに保存する（家計簿の CSV の書き出し。WebView ではブラウザのダウンロードが動かないため）
+        @JavascriptInterface public boolean saveFile(String name, String mime, String base64) {
+            try {
+                byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+                if (Build.VERSION.SDK_INT >= 29) {
+                    ContentValues cv = new ContentValues();
+                    cv.put(MediaStore.Downloads.DISPLAY_NAME, safe);
+                    cv.put(MediaStore.Downloads.MIME_TYPE, mime == null || mime.isEmpty() ? "application/octet-stream" : mime);
+                    Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                    if (uri == null) return false;
+                    try (OutputStream os = getContentResolver().openOutputStream(uri)) { os.write(bytes); }
+                } else {
+                    File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                    if (dir == null) return false;
+                    try (FileOutputStream os = new FileOutputStream(new File(dir, safe))) { os.write(bytes); }
+                }
+                toast("「ダウンロード」に保存しました：" + safe);
+                return true;
+            } catch (Exception e) { toast("保存できませんでした"); return false; }
+        }
     }
 }

@@ -72,11 +72,12 @@
 <div id="sheet"></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<!-- 読み込み順が依存関係：firebase-config → store → ledger → app-bridge → app -->
+<!-- 読み込み順が依存関係：firebase-config → store → ledger → app-bridge → kakeibo → app -->
 <script src="./firebase-config.js"></script>
 <script src="./store.js"></script>
 <script src="./ledger.js"></script>
 <script src="./app-bridge.js"></script>
+<script src="./kakeibo.js"></script>
 <script src="./app.js"></script>
 <script>
   if ('serviceWorker' in navigator && location.protocol === 'https:') {

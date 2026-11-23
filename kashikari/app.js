@@ -25,6 +25,10 @@
     pendingJoin: '', apk: { ready: false, silent: false },
   };
   let S = KStore.state();
+  // 自分の帳簿（家計簿）：kakeibo.js
+  const KB = Kakeibo({ esc: (v) => esc(v), yen: (n) => yen(n), today: () => today(), toast: (m, b) => toast(m, b), run: (p, m) => run(p, m), S: () => S, U: () => U,
+    openSheet: (k, x) => openSheet(k, x), closeSheet: () => closeSheet(), drawSheet: () => drawSheet(), sheetErr: (m) => sheetErr(m), foot: (l, x) => foot(l, x) });
+  window.__kkKbWidget = () => KB.widget();
 
   // ?join=帳簿ID（招待リンク）
   try {
@@ -89,7 +93,7 @@
     const waiting = pendingForMe().length;
     $('#tabs').innerHTML = `
       <button role="tab" data-act="tab" data-v="shared" aria-selected="${U.tab === 'shared'}">👪 みんなの帳簿${waiting ? `<span class="badge">${waiting}</span>` : ''}</button>
-      <button role="tab" data-act="tab" data-v="personal" aria-selected="${U.tab === 'personal'}">📒 自分だけの帳簿</button>`;
+      <button role="tab" data-act="tab" data-v="personal" aria-selected="${U.tab === 'personal'}">📒 自分の帳簿</button>`;
     $('#apk').hidden = !(U.apk.ready && !U.apk.silent && kkAppOutdated());
     $('#main').innerHTML = viewMain();
     if (f) { const el = document.getElementById(f.id); if (el) { el.focus(); try { if (f.s != null) el.setSelectionRange(f.s, f.e); } catch (e) {} } }
@@ -114,7 +118,7 @@
     if (!S.available && S.authReady) return `<section class="sec"><p class="hint">Firebase を読み込めませんでした。電波のよいところで開き直してください。</p></section>`;
     if (!S.authReady) return `<section class="sec"><p class="empty">読み込み中…</p></section>`;
     if (!S.user) return viewLogin();
-    return U.tab === 'personal' ? viewPersonal() : viewShared();
+    return U.tab === 'personal' ? KB.view(viewPersonal) : viewShared();
   }
 
   // ---------- ログイン ----------
@@ -178,6 +182,11 @@
         <button class="btn small" data-act="sheet" data-v="books" aria-label="帳簿をえらぶ・設定">帳簿 ▾</button>
       </div>
     </section>`;
+    if (b.closing) {
+      return h + `<section class="sec"><div class="notice"><h3>🗑 この帳簿は消している途中です</h3>
+        <p class="hint">${b.owner === me() ? '途中で止まったようです。「続きを消す」を押してください。' : 'つくった人が消しています。もう書けません。'}</p>
+        ${b.owner === me() ? '<div class="row end"><button class="btn danger small" data-act="delbook-go">続きを消す</button></div>' : ''}</div></section>`;
+    }
     h += viewClaimsToMe(b) + viewMyClaims(b);
     h += `<section class="sec">
       <div class="row between">
@@ -339,7 +348,7 @@
     const nets = KL.personalNets(S.personal);
     const inSum = nets.reduce((a, x) => a + x.lent, 0), outSum = nets.reduce((a, x) => a + x.borrowed, 0);
     let h = `<section class="sec">
-      <h2 class="sec-title"><span class="mark">📒</span> 自分だけの帳簿<span class="grow"></span><button class="btn primary small" data-act="pentry-new">＋ 記録をつける</button></h2>
+      <h2 class="sec-title"><span class="mark">🤝</span> 自分だけの貸し借り<span class="grow"></span><button class="btn primary small" data-act="pentry-new">＋ 記録をつける</button></h2>
       <p class="hint">友だちなど、アプリを使っていない人との貸し借りを書いておけます。ここに書いたものは、あなたにしか見えません。</p>
       <div class="balances">
         <div class="bal in"><span class="label">返ってくる予定</span><span class="num">${yen(inSum)}</span></div>
@@ -394,13 +403,14 @@
   // ---------- 下から出る画面 ----------
   function openSheet(kind, extra) {
     const b = book();
-    const base = { kind, err: '', busy: false };
+    const base = { sheetKind: kind, err: '', busy: false };
     if (kind === 'newbook') U.sheet = { ...base, name: S.books.length ? '' : 'きょうだいの帳簿', nick: defaultNick() };
     else if (kind === 'join') U.sheet = { ...base, code: (extra && extra.code) || '', peek: null, nick: defaultNick() };
     else if (kind === 'rename') U.sheet = { ...base, nick: b ? b.names[me()] || '' : '' };
     else if (kind === 'renamebook') U.sheet = { ...base, name: b ? b.name : '' };
     else if (kind === 'loan') U.sheet = { ...base, ...extra };
-    else if (kind === 'pentry') U.sheet = { ...base, ...extra };
+    else if (kind === 'pentry' || KB.has(kind)) U.sheet = { ...base, ...extra, sheetKind: kind };
+    else if (kind === 'delbook') U.sheet = { ...base, confirmName: '' };
     else U.sheet = base;
     drawSheet();
     if (kind === 'join' && U.sheet.code) peekJoin();
@@ -411,14 +421,15 @@
     document.body.classList.toggle('locked', !!U.sheet);
     const box = $('#sheet');
     if (!U.sheet) { box.innerHTML = ''; return; }
-    const k = U.sheet.kind;
-    const title = { newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
+    const k = U.sheet.sheetKind;
+    const title = KB.has(k) ? KB.title(k) : { delbook: '帳簿を消す', leavebook: '帳簿から抜ける', newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
     box.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title" data-form="sheet">
       <div class="sheet-head"><h2 id="sh-title">${title}</h2><button type="button" class="close" data-act="sheet-close" aria-label="閉じる">×</button></div>
-      ${sheetBody(k)}
+      ${KB.has(k) ? KB.sheetBody(k) : sheetBody(k)}
       <p class="err" id="sh-err" ${U.sheet.err ? '' : 'hidden'}>${esc(U.sheet.err)}</p>
     </form></div>`;
     updatePreview();
+    KB.afterDraw();
   }
   function sheetErr(msg) {
     if (!U.sheet) return;
@@ -450,7 +461,8 @@
     if (k === 'books') return `
       <div class="choice">${S.books.map((x) => `<button type="button" data-act="book-pick" data-id="${esc(x.id)}" aria-current="${x.id === (b && b.id)}">${esc(x.name)}<small>${x.members.length}人・あなたは「${esc(x.names[me()] || '')}」</small></button>`).join('')}</div>
       <div class="row"><button type="button" class="btn" data-act="sheet" data-v="newbook">＋ 新しい帳簿</button><button type="button" class="btn" data-act="sheet" data-v="join">招待コードで参加</button></div>
-      ${b ? `<div class="row"><button type="button" class="btn small" data-act="sheet" data-v="rename">自分の呼び名を変える</button>${b.owner === me() ? `<button type="button" class="btn small" data-act="sheet" data-v="renamebook">帳簿の名前を変える</button>` : ''}</div>` : ''}`;
+      ${b ? `<div class="row"><button type="button" class="btn small" data-act="sheet" data-v="rename">自分の呼び名を変える</button>${b.owner === me() ? `<button type="button" class="btn small" data-act="sheet" data-v="renamebook">帳簿の名前を変える</button>` : ''}</div>` : ''}
+      ${b ? `<div class="row">${b.owner === me() ? `<button type="button" class="btn small danger" data-act="sheet" data-v="delbook">🗑 「${esc(b.name)}」を消す</button>` : `<button type="button" class="btn small danger" data-act="sheet" data-v="leavebook">「${esc(b.name)}」から抜ける</button>`}</div>` : ''}`;
     if (k === 'rename') return `
       <div class="field"><label for="rn-nick">「${esc(b.name)}」での呼び名</label><input id="rn-nick" maxlength="20" data-bind="sheet.nick" value="${esc(X.nick)}"></div>${foot('変える')}`;
     if (k === 'renamebook') return `
@@ -460,6 +472,14 @@
       <p class="hint">${S.online ? (S.pending ? '☁️ 送信中…（つながったら送ります）' : '☁️ 同期中：ほかの端末にもすぐ届きます') : '📴 オフライン：書いたものはこの端末に覚えておき、つながったら送ります'}</p>
       ${S.error ? `<p class="err">⚠️ ${esc(S.error)}</p>` : ''}
       <div class="row end"><button type="button" class="btn danger" data-act="logout">ログアウト</button></div>`;
+    if (k === 'delbook') return `
+      <p class="hint">「${esc(b.name)}」と、中の記録（${loansOf(b).length}件）・返したよを<b>ぜんぶ消します</b>。参加しているみんなの画面からも消えて、もとに戻せません。</p>
+      <p class="hint">消すときは、下に帳簿の名前「${esc(b.name)}」を打ってください。</p>
+      <div class="field"><label for="db-name">帳簿の名前</label><input id="db-name" class="plain-input" data-bind="sheet.confirmName" value="${esc(X.confirmName)}" autocomplete="off"></div>
+      <div class="row end"><button type="button" class="btn" data-act="sheet-close">やめる</button><button type="submit" class="btn danger" ${X.busy ? 'disabled' : ''}>${X.busy ? '消しています…' : 'ぜんぶ消す'}</button></div>`;
+    if (k === 'leavebook') return `
+      <p class="hint">「${esc(b.name)}」から抜けると、この帳簿が見られなくなります。あなたが書いた記録は帳簿に残ります（ほかの人は見られます）。もう一度入るには、招待リンクが要ります。</p>
+      <div class="row end"><button type="button" class="btn" data-act="sheet-close">やめる</button><button type="button" class="btn danger" data-act="leave-yes">抜ける</button></div>`;
     if (k === 'loan') return loanBody(X, b);
     if (k === 'pentry') return pentryBody(X);
     return '';
@@ -510,7 +530,7 @@
     const X = U.sheet, el = $('#sh-preview');
     if (!X || !el) return;
     const b = book();
-    if (X.kind !== 'loan') return;
+    if (X.sheetKind !== 'loan') return;
     if (X.mode === 'split') {
       const c = splitCalc(X);
       el.innerHTML = !c ? '相手をえらんで合計を入れると、1人いくらかが出ます。'
@@ -579,7 +599,7 @@
   // 帳簿
   async function peekJoin() {
     const X = U.sheet;
-    if (!X || X.kind !== 'join') return;
+    if (!X || X.sheetKind !== 'join') return;
     const m = /([A-Za-z0-9]{10,40})\s*$/.exec((X.code || '').replace(/[?&#].*join=/, ' ').trim());
     const code = m ? m[1] : '';
     if (!code) return sheetErr('招待コードを入れてください');
@@ -596,9 +616,11 @@
     const X = U.sheet;
     if (!X || X.busy) return;
     const b = book();
-    if (X.kind === 'loan') return saveLoan();
-    if (X.kind === 'pentry') return savePentry();
-    if (X.kind === 'newbook') {
+    if (KB.has(X.sheetKind)) return KB.submit(X.sheetKind);
+    if (X.sheetKind === 'loan') return saveLoan();
+    if (X.sheetKind === 'pentry') return savePentry();
+    if (X.sheetKind === 'delbook') return deleteBook();
+    if (X.sheetKind === 'newbook') {
       const name = X.name.trim(), nick = X.nick.trim();
       if (!name) return sheetErr('帳簿の名前を入れてください');
       if (!nick) return sheetErr('呼び名を入れてください');
@@ -607,7 +629,7 @@
       catch (e) { X.busy = false; sheetErr(errText(e)); }
       return;
     }
-    if (X.kind === 'join') {
+    if (X.sheetKind === 'join') {
       if (!X.peek) return peekJoin();
       const nick = X.nick.trim();
       if (!nick) return sheetErr('呼び名を入れてください');
@@ -620,13 +642,32 @@
       } catch (e) { X.busy = false; sheetErr(errText(e)); }
       return;
     }
-    if (X.kind === 'rename') {
+    if (X.sheetKind === 'rename') {
       const nick = X.nick.trim(); if (!nick) return sheetErr('呼び名を入れてください');
       run(KStore.renameMe(b.id, nick), '✓ 呼び名を変えました'); closeSheet(); return;
     }
-    if (X.kind === 'renamebook') {
+    if (X.sheetKind === 'renamebook') {
       const name = X.name.trim(); if (!name) return sheetErr('名前を入れてください');
       run(KStore.renameBook(b.id, name), '✓ 帳簿の名前を変えました'); closeSheet();
+    }
+  }
+
+  // 帳簿を消す（つくった人だけ）。閉じる → 中の記録を消す → 帳簿を消す。途中で止まっても、もう一度で続きから
+  async function deleteBook() {
+    const b = book(), X = U.sheet;
+    if (!b || b.owner !== me()) return;
+    if (X && X.sheetKind === 'delbook') {
+      if (X.busy) return;
+      if (X.confirmName.trim() !== b.name) return sheetErr('帳簿の名前がちがいます');
+      X.busy = true; sheetErr(''); drawSheet();
+    }
+    try {
+      await KStore.deleteBook(b.id);
+      toast(`🗑 「${b.name}」を消しました`);
+      U.bookId = ''; store('kashikari-book', null);
+      if (U.sheet) closeSheet(); else render();
+    } catch (e) {
+      if (U.sheet) { U.sheet.busy = false; drawSheet(); sheetErr(errText(e)); } else toast(errText(e), true);
     }
   }
 
@@ -680,11 +721,13 @@
   // ---------- 操作 ----------
   function setPath(path, t) {
     const [root, key] = path.split('.');
-    const o = root === 'login' ? U.login : root === 'repay' ? U.repay : root === 'claimForm' ? U.claimForm : root === 'sheet' ? U.sheet : null;
+    const o = root === 'kb' ? KB.state : root === 'login' ? U.login : root === 'repay' ? U.repay : root === 'claimForm' ? U.claimForm : root === 'sheet' ? U.sheet : null;
     if (!o) return;
-    if (key === 'amount' && root === 'sheet' && U.sheet.kind === 'loan') U.sheet.amounts[t.dataset.key] = t.value;
+    if (key === 'amount' && root === 'sheet' && U.sheet.sheetKind === 'loan') U.sheet.amounts[t.dataset.key] = t.value;
+    else if (key === 'cat' && root === 'sheet' && U.sheet.sheetKind === 'kb-budget') U.sheet.cats[t.dataset.key] = t.value;
     else o[key] = t.type === 'checkbox' ? t.checked : t.value;
-    if (root === 'sheet') updatePreview();
+    if (root === 'sheet') { updatePreview(); KB.afterDraw(); }
+    if (root === 'kb') render();
     if (root === 'login' && key === 'create') render();
   }
   const onBind = (e) => { const p = e.target.dataset && e.target.dataset.bind; if (p) setPath(p, e.target); };
@@ -760,7 +803,9 @@
       }
       case 'confirm-no': U.confirm = null; break;
       case 'apk-install': kkInstallApk(); return;
-      default: return;
+      case 'leave-yes': { const b = book(); if (b) { run(KStore.leaveBook(b.id), `「${b.name}」から抜けました`); U.bookId = ''; store('kashikari-book', null); } closeSheet(); return; }
+      case 'delbook-go': deleteBook(); return;
+      default: { const r = KB.click(a, d); if (r === 'render') break; return; }
     }
     render();
     if (a === 'repay-open' || a === 'prepay-open' || a === 'claim-open') setTimeout(() => { const i = $('#rp-amount') || $('#cl-amount'); if (i) { i.focus(); i.select(); } }, 40);
@@ -796,6 +841,7 @@
       else { U.tab = 'shared'; openSheet('join', { code }); }
     }
     render();
+    KB.fillRecurring();
     kkSendWidget(S);
   });
   $('#syncBtn').addEventListener('click', () => { if (S.user) openSheet('account'); else { U.tab = 'shared'; render(); } });
