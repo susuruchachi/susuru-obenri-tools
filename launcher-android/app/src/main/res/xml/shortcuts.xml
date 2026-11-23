@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- アイコンの長押し：それぞれのアプリをすぐ開く・ランチャーの画面を出す -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="anki" android:enabled="true" android:icon="@drawable/ic_launcher" android:shortcutShortLabel="@string/scAnki">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="io.github.susuruchachi.susurulauncher"
+            android:targetClass="io.github.susuruchachi.susurulauncher.MainActivity" android:data="susurulauncher://open?app=anki" />
+    </shortcut>
+    <shortcut android:shortcutId="koukai" android:enabled="true" android:icon="@drawable/ic_launcher" android:shortcutShortLabel="@string/scKoukai">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="io.github.susuruchachi.susurulauncher"
+            android:targetClass="io.github.susuruchachi.susurulauncher.MainActivity" android:data="susurulauncher://open?app=koukai" />
+    </shortcut>
+    <shortcut android:shortcutId="kashikari" android:enabled="true" android:icon="@drawable/ic_launcher" android:shortcutShortLabel="@string/scKashikari">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="io.github.susuruchachi.susurulauncher"
+            android:targetClass="io.github.susuruchachi.susurulauncher.MainActivity" android:data="susurulauncher://open?app=kashikari" />
+    </shortcut>
+    <shortcut android:shortcutId="home" android:enabled="true" android:icon="@drawable/ic_launcher" android:shortcutShortLabel="@string/scHome">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="io.github.susuruchachi.susurulauncher"
+            android:targetClass="io.github.susuruchachi.susurulauncher.MainActivity" android:data="susurulauncher://home" />
+    </shortcut>
+</shortcuts>

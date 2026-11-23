@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="appName">すするアプリ</string>
+    <string name="widgetName">すするアプリ</string>
+    <string name="widgetDescription">すするanki・航海日誌・すする帳簿をすぐ開く</string>
+    <string name="scAnki">すするanki</string>
+    <string name="scKoukai">航海日誌</string>
+    <string name="scKashikari">すする帳簿</string>
+    <string name="scHome">ランチャー</string>
+</resources>
