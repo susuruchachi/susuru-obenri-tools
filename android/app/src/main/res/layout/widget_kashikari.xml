@@ -38,6 +38,10 @@
         </LinearLayout>
     </LinearLayout>
 
+    <TextView android:id="@+id/w_month" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:text="" android:textSize="12sp" android:textColor="#97A8B5"
+        android:maxLines="1" android:ellipsize="end" android:visibility="gone" />
+
     <TextView android:id="@+id/w_claims" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="6dp" android:text="" android:textSize="12sp" android:textStyle="bold"
         android:textColor="#131E29" android:background="@drawable/widget_claim" android:paddingLeft="8dp" android:paddingRight="8dp"

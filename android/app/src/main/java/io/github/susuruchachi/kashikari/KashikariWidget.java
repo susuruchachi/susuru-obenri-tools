@@ -60,6 +60,7 @@ public class KashikariWidget extends AppWidgetProvider {
             v.setTextViewText(R.id.w_out, "—");
             v.setTextViewText(R.id.w_lines, data.has("signedIn") ? "ログインすると、ここに貸し借りが出ます" : "タップしてアプリを開くと、ここに貸し借りが出ます");
             v.setViewVisibility(R.id.w_claims, View.GONE);
+            v.setViewVisibility(R.id.w_month, View.GONE);
             v.setTextViewText(R.id.w_at, "");
         } else {
             v.setTextViewText(R.id.w_in, WidgetData.yen(data.optLong("inSum", 0)));
@@ -73,6 +74,23 @@ public class KashikariWidget extends AppWidgetProvider {
                 if (h > 0) rows = Math.max(1, Math.min(8, (h - 110) / 20));
             } catch (Exception ignored) {}
             if (claims > 0) rows = Math.max(1, rows - 1);
+
+            // 家計簿：今月の支出と、予算のあと
+            JSONObject kb = data.optJSONObject("kb");
+            if (kb != null) {
+                rows = Math.max(1, rows - 1);
+                long exp = kb.optLong("exp", 0), budget = kb.optLong("budget", 0);
+                SpannableStringBuilder m = new SpannableStringBuilder();
+                add(m, "📒 " + kb.optInt("m", 0) + "月の支出 ", C_SUB, false);
+                add(m, WidgetData.yen(exp), C_TEXT, true);
+                if (budget > 0) {
+                    long left = budget - exp;
+                    add(m, left >= 0 ? "  予算あと " : "  予算オーバー ", C_SUB, false);
+                    add(m, WidgetData.yen(Math.abs(left)), left >= 0 ? C_BRASS : C_DANGER, true);
+                }
+                v.setTextViewText(R.id.w_month, m);
+                v.setViewVisibility(R.id.w_month, View.VISIBLE);
+            } else v.setViewVisibility(R.id.w_month, View.GONE);
 
             SpannableStringBuilder t = new SpannableStringBuilder();
             JSONArray lines = data.optJSONArray("lines");

@@ -15,12 +15,13 @@
   const BOOKS = 'kashikari_books', PRIVATE = 'kashikari_private';
 
   let auth = null, db = null, user = null;
-  let booksUnsub = null, privUnsub = null;
+  let booksUnsub = null, privUnsub = null, txUnsub = null, kbUnsub = null;
   const bookSubs = {}; // 帳簿ID -> [unsub, unsub]
   const st = {
     available: false, configMissing: !(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId), authReady: false, user: null, error: '',
     online: typeof navigator === 'undefined' || navigator.onLine !== false, pending: false,
     booksReady: false, books: [], loans: {}, claims: {}, privateReady: false, personal: [],
+    txReady: false, tx: [], kbReady: false, kb: null, // 家計簿（収入・支出・振替）と、その設定（分類・口座・予算・固定費）
   };
   const listeners = new Set();
   let emitQueued = false;
@@ -38,7 +39,7 @@
     v = v || {};
     const names = {};
     if (v.names && typeof v.names === 'object') Object.keys(v.names).forEach((k) => { names[k] = str(v.names[k], 20); });
-    return { id, name: str(v.name, 40) || '帳簿', owner: str(v.owner, 128), members: Array.isArray(v.members) ? v.members.filter((x) => typeof x === 'string') : [], names, createdAt: num(v.createdAt) };
+    return { id, name: str(v.name, 40) || '帳簿', closing: v.closing === true, owner: str(v.owner, 128), members: Array.isArray(v.members) ? v.members.filter((x) => typeof x === 'string') : [], names, createdAt: num(v.createdAt) };
   }
   function cleanLoan(id, v) {
     v = v || {};
@@ -54,6 +55,14 @@
     return {
       id, loanId: str(v.loanId, 40), lender: str(v.lender, 128), from: str(v.from, 128), amount: num(v.amount), date: str(v.date, 10),
       note: str(v.note, 100), status: ['approved', 'rejected'].includes(v.status) ? v.status : 'pending', createdAt: num(v.createdAt), decidedAt: num(v.decidedAt),
+    };
+  }
+  function cleanTx(id, v) {
+    v = v || {};
+    return {
+      id, kind: ['income', 'transfer', 'adjust'].includes(v.kind) ? v.kind : 'expense', dir: v.dir === 'minus' ? 'minus' : 'plus', date: str(v.date, 10), amount: num(v.amount),
+      cat: str(v.cat, 40), account: str(v.account, 40), toAccount: str(v.toAccount, 40), title: str(v.title, 60), memo: str(v.memo, 300),
+      rec: str(v.rec, 40), createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
     };
   }
   function cleanEntry(id, v) {
@@ -99,6 +108,9 @@
   function stopAll() {
     if (booksUnsub) { try { booksUnsub(); } catch (e) {} booksUnsub = null; }
     if (privUnsub) { try { privUnsub(); } catch (e) {} privUnsub = null; }
+    if (txUnsub) { try { txUnsub(); } catch (e) {} txUnsub = null; }
+    if (kbUnsub) { try { kbUnsub(); } catch (e) {} kbUnsub = null; }
+    st.tx = []; st.kb = null; st.txReady = false; st.kbReady = false;
     Object.keys(bookSubs).concat(Object.keys(retryTimers)).forEach((id) => unwatchBook(id));
     st.books = []; st.loans = {}; st.claims = {}; st.personal = []; st.booksReady = false; st.privateReady = false;
   }
@@ -123,6 +135,20 @@
       st.pending = snap.metadata.hasPendingWrites;
       emit();
     }, (e) => { st.privateReady = true; st.error = e.code || e.message; emit(); });
+    // 家計簿
+    txUnsub = db.collection(PRIVATE).doc(uid).collection('tx').onSnapshot({ includeMetadataChanges: true }, (snap) => {
+      if (!user || user.uid !== uid) return;
+      st.tx = snap.docs.map((d) => cleanTx(d.id, d.data()));
+      st.txReady = true;
+      st.pending = snap.metadata.hasPendingWrites;
+      emit();
+    }, (e) => { st.txReady = true; st.error = e.code || e.message; emit(); });
+    kbUnsub = db.collection(PRIVATE).doc(uid).collection('kakeibo').doc('settings').onSnapshot((snap) => {
+      if (!user || user.uid !== uid) return;
+      st.kb = snap.exists ? snap.data() : null;
+      st.kbReady = true;
+      emit();
+    }, (e) => { st.kbReady = true; st.error = e.code || e.message; emit(); });
     emit();
   }
 
@@ -224,6 +250,25 @@
     },
     async renameMe(id, nickname) { need(); await bookRef(id).update({ [`names.${user.uid}`]: nickname }); },
     async renameBook(id, name) { need(); await bookRef(id).update({ name }); },
+    // 帳簿から抜ける（つくった人以外）
+    async leaveBook(id) { need(); await bookRef(id).update({ members: firebase.firestore.FieldValue.arrayRemove(user.uid) }); },
+    // 帳簿を消す（つくった人だけ）：閉じる（もう書けなくなる）→ 中の記録・返したよを消す → 帳簿を消す
+    // 途中で止まっても、閉じた帳簿はもう一度「消す」で続きから消せる
+    async deleteBook(id) {
+      need();
+      const ref = bookRef(id);
+      const b = await ref.get();
+      if (b.exists && b.data().closing !== true) await ref.update({ closing: true });
+      for (const sub of ['loans', 'claims']) {
+        const docs = (await ref.collection(sub).get()).docs;
+        for (let i = 0; i < docs.length; i += 400) {
+          const batch = db.batch();
+          docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+          await batch.commit();
+        }
+      }
+      await ref.delete();
+    },
 
     // ---- 貸した記録（自分が貸したものだけ書ける）----
     async saveLoan(bookId, id, body) {
@@ -260,6 +305,29 @@
       await ref.set(clean({ ...body, updatedAt: now(), createdAt: body.createdAt || now() }));
     },
     async deletePersonal(id) { need(); await db.collection(PRIVATE).doc(user.uid).collection('entries').doc(id).delete(); },
+
+    // ---- 家計簿 ----
+    // 収入・支出・振替：kashikari_private/{uid}/tx/{id}
+    async saveTx(id, body) {
+      need();
+      const col = db.collection(PRIVATE).doc(user.uid).collection('tx');
+      const ref = id ? col.doc(id) : col.doc();
+      await ref.set(clean({ ...body, updatedAt: now(), createdAt: body.createdAt || now() }));
+      return ref.id;
+    },
+    async deleteTx(id) { need(); await db.collection(PRIVATE).doc(user.uid).collection('tx').doc(id).delete(); },
+    // 固定費をまとめて入れる（id は rec_固定費ID_年-月 で決まっているので、2回入れても1つになる）
+    async putTxMany(list) {
+      need();
+      const col = db.collection(PRIVATE).doc(user.uid).collection('tx');
+      for (let i = 0; i < list.length; i += 400) {
+        const batch = db.batch();
+        list.slice(i, i + 400).forEach(({ id, body }) => batch.set(col.doc(id), clean({ ...body, updatedAt: now(), createdAt: now() })));
+        await batch.commit();
+      }
+    },
+    // 設定（分類・口座・予算・固定費）：kashikari_private/{uid}/kakeibo/settings
+    async saveKb(settings) { need(); await db.collection(PRIVATE).doc(user.uid).collection('kakeibo').doc('settings').set(clean({ ...settings, updatedAt: now() })); },
   };
   init();
 })();
