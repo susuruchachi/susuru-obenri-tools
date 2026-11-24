@@ -71,6 +71,7 @@
       cat: str(v.cat, 40), account: str(v.account, 40), toAccount: str(v.toAccount, 40), title: str(v.title, 60), memo: str(v.memo, 300),
       rec: str(v.rec, 40), base: num(v.base), shifted: num(v.shifted), shift: str(v.shift, 40),
       from: str(v.from, 60), event: str(v.event, 40), // from：どの収入から移したか（振替）。event：どの予定で使ったか
+      wish: str(v.wish, 40), wdir: v.wdir === 'out' ? 'out' : '', // wish：どのほしい物のために貯めた振替か（wdir out は取り崩し）
       createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
     };
   }
