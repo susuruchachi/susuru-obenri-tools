@@ -29,6 +29,7 @@
   const KB = Kakeibo({ esc: (v) => esc(v), yen: (n) => yen(n), today: () => today(), toast: (m, b) => toast(m, b), run: (p, m) => run(p, m), S: () => S, U: () => U,
     openSheet: (k, x) => openSheet(k, x), closeSheet: () => closeSheet(), drawSheet: () => drawSheet(), sheetErr: (m) => sheetErr(m), foot: (l, x) => foot(l, x) });
   window.__kkKbWidget = () => KB.widget();
+  window.__kkKbDue = () => KB.dueItems();
 
   // ?join=帳簿ID（招待リンク）
   try {

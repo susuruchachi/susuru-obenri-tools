@@ -66,7 +66,8 @@ function kkBuildWidgetData(st) {
   // 返す期限：期限すぎ・7日以内の数と、いちばん近いもの
   let due = null;
   try {
-    const items = KL.dueItems(st.books, st.loans, st.personal, me);
+    // 貸し借りの期限と、家計簿の「まだ払っていない後払い」の払う予定の日
+    const items = KL.dueItems(st.books, st.loans, st.personal, me).concat(window.__kkKbDue ? window.__kkKbDue() : []).sort((x, y) => x.due.localeCompare(y.due));
     const over = items.filter((x) => x.days < 0).length, soon = items.filter((x) => x.days >= 0 && x.days <= 7).length;
     const n = items[0];
     if (over || soon) due = { over, soon, next: n ? { d: n.d, who: n.who, amt: n.amt, due: n.due, days: n.days } : null };
