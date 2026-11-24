@@ -51,6 +51,36 @@
   const defaultNick = () => { const u = S.user || {}; return (u.name || (u.email || '').split('@')[0] || '').slice(0, 20); };
   const sortByDate = (a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0);
   const myLoan = (id) => loansOf(book()).find((l) => l.id === id && l.lender === me());
+  // 返す期限
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const dueTag = (due, rest) => {
+    if (!due || !rest) return '';
+    const n = KL.daysLeft(due);
+    const t = n < 0 ? `期限すぎ（${-n}日）` : n === 0 ? '今日が期限' : `あと${n}日`;
+    return `<span class="tag ${n < 0 ? 'due' : n <= 3 ? 'part' : 'soft'}">⏰ ${esc(fmtDate(due))}・${t}</span>`;
+  };
+  const dueField = (X, label) => `<div class="field"><label for="sh-due">${label || '返す期限（なくてもOK）'}</label>
+    <div class="row"><input id="sh-due" type="date" class="plain-input due-input" data-bind="sheet.due" value="${esc(X.due || '')}">
+    <button type="button" class="pillbtn" data-act="due-set" data-v="7">1週間後</button><button type="button" class="pillbtn" data-act="due-set" data-v="14">2週間後</button>
+    <button type="button" class="pillbtn" data-act="due-set" data-v="end">月末</button>${X.due ? '<button type="button" class="pillbtn" data-act="due-set" data-v="">なし</button>' : ''}</div></div>`;
+  // 期限の一覧（まとめに出す）
+  const dueList = (items, withBook) => !items.length ? '' : `<h3 class="sec-title"><span class="mark">⏰</span> 返す期限</h3><ul class="lines">${items.slice(0, 8).map((x) =>
+    `<li><div class="who">${x.d === 'in' ? `${esc(x.who)}<span class="arrow">→</span>あなた` : `あなた<span class="arrow">→</span>${esc(x.who)}`}<small>${esc(x.title || '（内容なし）')}${withBook && x.book ? '・' + esc(x.book) : ''}</small>${dueTag(x.due, x.amt)}</div><div class="amt ${x.d}">${yen(x.amt)}</div></li>`).join('')}</ul>${items.length > 8 ? `<p class="hint">ほか ${items.length - 8}件</p>` : ''}`;
+  // 肩代わりできる借り（ほかの人どうしの、まだ返っていない分。返したよの確認待ちは除く）
+  function coverCandidates(b) {
+    const out = [];
+    const pend = claimsOf(b).filter((c) => c.status === 'pending');
+    loansOf(b).forEach((l) => {
+      if (l.lender === me()) return;
+      l.shares.forEach((s) => {
+        const r = shareStat(s).rest;
+        if (!r || s.to === me() || s.to === l.lender) return;
+        if (pend.some((c) => c.loanId === l.id && (c.for || c.from) === s.to)) return;
+        out.push({ l, s, rest: r });
+      });
+    });
+    return out.sort((x, y) => (x.l.date || '').localeCompare(y.l.date || ''));
+  }
 
   function errText(e) {
     const c = (e && e.code) || '';
@@ -213,11 +243,12 @@
   }
   function claimRow(b, c) {
     const l = loansOf(b).find((x) => x.id === c.loanId);
-    const s = l && l.shares.find((x) => x.to === c.from);
+    const s = l && l.shares.find((x) => x.to === (c.for || c.from));
     const rest = s ? shareStat(s).rest : 0;
     const over = s && c.amount > rest;
     return `<div class="claim">
-      <div><b>${nameH(b, c.from)}</b> が <span class="num" style="color:var(--signal)">${yen(c.amount)}</span> 返したよ</div>
+      <div>${c.for ? `<b>${nameH(b, c.from)}</b> が <b>${nameH(b, c.for)}</b> の代わりに <span class="num" style="color:var(--signal)">${yen(c.amount)}</span> 返したよ <span class="tag part">肩代わり</span>`
+        : `<b>${nameH(b, c.from)}</b> が <span class="num" style="color:var(--signal)">${yen(c.amount)}</span> 返したよ`}</div>
       <div class="sub">${esc(fmtDate(c.date))}・${l ? esc(l.title || '（内容なし）') : '（消した記録）'}${c.note ? `・「${esc(c.note)}」` : ''}${s ? `・残り ${yen(rest)}` : ''}</div>
       ${over && rest ? `<div class="sub" style="color:var(--brass-bright)">残りより多いので、認めると残り ${yen(rest)} を返済として入れます</div>` : ''}
       <div class="row end">
@@ -234,9 +265,10 @@
       ${list.map((c) => {
         const l = loansOf(b).find((x) => x.id === c.loanId);
         return `<div class="claim">
-          <div>${nameH(b, c.lender)} に <span class="num">${yen(c.amount)}</span>（${esc(fmtDate(c.date))}・${l ? esc(l.title || '（内容なし）') : '（消した記録）'}）</div>
+          <div>${nameH(b, c.lender)} に ${c.for ? `<b>${nameH(b, c.for)}</b> の代わりに ` : ''}<span class="num">${yen(c.amount)}</span>（${esc(fmtDate(c.date))}・${l ? esc(l.title || '（内容なし）') : '（消した記録）'}）</div>
           <div class="row between"><span class="tag ${c.status === 'rejected' ? 'due' : 'wait'}">${c.status === 'rejected' ? '断られました' : '確認待ち'}</span>
-          <button class="btn small" data-act="claim-delete" data-id="${esc(c.id)}">${c.status === 'rejected' ? '消す' : '取り消す'}</button></div>
+          ${c.for ? `<button class="btn small" data-act="cover-cancel" data-id="${esc(c.id)}">${c.status === 'rejected' ? '消す' : '取り消す'}（${esc(nameIn(b, c.for))}への貸しも）</button>`
+            : `<button class="btn small" data-act="claim-delete" data-id="${esc(c.id)}">${c.status === 'rejected' ? '消す' : '取り消す'}</button>`}</div>
         </div>`;
       }).join('')}
     </div></section>`;
@@ -249,6 +281,7 @@
       <div class="bal in"><span class="label">返ってくる予定</span><span class="num">${yen(inSum)}</span></div>
       <div class="bal out"><span class="label">返す予定</span><span class="num">${yen(outSum)}</span></div>
     </div>`;
+    h += dueList(KL.dueItems([b], S.loans, [], me()), false);
     h += `<h3 class="sec-title"><span class="mark">⚓</span> 相手ごと（差し引き）</h3>`;
     h += nets.length ? `<ul class="lines">${nets.map((x) => {
       const detail = x.lent && x.borrowed ? `<small>貸し ${yen(x.lent)}・借り ${yen(x.borrowed)} を差し引き</small>` : '';
@@ -285,11 +318,11 @@
     const split = l.mode === 'split' && l.total ? `<span>${l.shares.length + (l.includeSelf ? 1 : 0)}人で割り勘（合計 <b class="num">${yen(l.total)}</b>）</span>` : '';
     const shares = l.shares.map((s) => {
       const { paid, rest: r } = shareStat(s);
-      const myClaim = claims.find((c) => c.from === s.to);
+      const myClaim = claims.find((c) => (c.for || c.from) === s.to);
       const tag = r === 0 ? '<span class="tag ok">完済</span>' : myClaim ? '<span class="tag wait">確認待ち</span>' : paid ? '<span class="tag part">一部返済</span>' : '<span class="tag due">まだ</span>';
       const hist = s.repayments.length ? `<ul class="history">${s.repayments.map((rp) => {
         const conf = U.confirm && U.confirm.kind === 'rep' && U.confirm.id === l.id && U.confirm.to === s.to && U.confirm.rid === rp.id;
-        return `<li><span class="mono">${esc(fmtDate(rp.date))}</span><span class="num">${yen(rp.amount)}</span>返済${rp.claim ? '（返したよ）' : ''}
+        return `<li><span class="mono">${esc(fmtDate(rp.date))}</span><span class="num">${yen(rp.amount)}</span>返済${rp.by && rp.by !== s.to ? `（${esc(nameIn(b, rp.by))} が肩代わり）` : rp.claim ? '（返したよ）' : ''}
           ${mine ? (conf ? `<span class="confirm"><span>取り消す？</span><button class="btn small danger" data-act="rep-del-yes">取り消す</button><button class="btn small" data-act="confirm-no">やめる</button></span>`
             : `<button class="x" data-act="rep-del" data-id="${esc(l.id)}" data-to="${esc(s.to)}" data-rid="${esc(rp.id)}">取り消す</button>`) : ''}</li>`;
       }).join('')}</ul>` : '';
@@ -298,7 +331,8 @@
         act = U.repay && U.repay.scope === 'loan' && U.repay.id === l.id && U.repay.to === s.to ? repayForm(r)
           : `<div class="row"><button class="btn small" data-act="repay-open" data-id="${esc(l.id)}" data-to="${esc(s.to)}">返済を記録</button></div>`;
       } else if (s.to === me() && r > 0) {
-        act = myClaim ? `<p class="hint">「返したよ」（${yen(myClaim.amount)}）を出しました。${nameH(b, l.lender)} が認めると返済に入ります。</p>`
+        act = myClaim ? (myClaim.for ? `<p class="hint">${nameH(b, myClaim.from)} があなたの代わりに ${yen(myClaim.amount)} 返したよ（肩代わり）。${nameH(b, l.lender)} が認めると返済に入り、その分は ${nameH(b, myClaim.from)} に返すことになります。</p>`
+            : `<p class="hint">「返したよ」（${yen(myClaim.amount)}）を出しました。${nameH(b, l.lender)} が認めると返済に入ります。</p>`)
           : U.claimForm && U.claimForm.loanId === l.id ? claimForm(r)
           : `<div class="row"><button class="btn small" data-act="claim-open" data-id="${esc(l.id)}">返したよ</button></div>`;
       }
@@ -308,13 +342,18 @@
         ${hist}${act}</li>`;
     }).join('');
     const conf = U.confirm && U.confirm.kind === 'loan' && U.confirm.id === l.id;
+    const vc = l.via ? claimsOf(b).find((c) => c.id === l.via.claimId) : null;
+    const via = l.via ? `<div class="via">🔁 ${nameH(b, l.via.lender)} への返済（${esc(l.via.title || '（内容なし）')}）を、${nameH(b, l.via.for)} の代わりに返した
+      ${vc ? (vc.status === 'pending' ? `<span class="tag wait">${esc(nameIn(b, l.via.lender))} の確認待ち</span>` : vc.status === 'rejected' ? `<span class="tag due">${esc(nameIn(b, l.via.lender))} に断られました</span>` : '<span class="tag ok">認められました</span>') : ''}
+      ${vc && vc.status === 'rejected' && mine ? '<p class="hint">まちがいなら「消す」で取り消せます。</p>' : ''}</div>` : '';
+    const paidTo = l.paidTo || l.paidToName ? `<span>払った先 <b>${l.paidTo ? nameH(b, l.paidTo) : esc(l.paidToName)}</b>（立て替え）</span>` : '';
     const actions = mine ? `<div class="row end">${conf
-      ? `<span class="confirm"><span>この記録を消しますか？（返済の記録も消えます）</span><button class="btn small danger" data-act="loan-del-yes">消す</button><button class="btn small" data-act="confirm-no">やめる</button></span>`
+      ? `<span class="confirm"><span>この記録を消しますか？（返済の記録${vc && vc.status !== 'approved' ? '・返したよ' : ''}も消えます）</span><button class="btn small danger" data-act="loan-del-yes">消す</button><button class="btn small" data-act="confirm-no">やめる</button></span>`
       : `<button class="btn small" data-act="loan-edit" data-id="${esc(l.id)}">直す</button><button class="btn small danger" data-act="loan-del" data-id="${esc(l.id)}">消す</button>`}</div>` : '';
     return `<article class="entry${done ? ' done' : ''}">${done ? '<div class="stamp">完済</div>' : ''}
       <div class="entry-head"><h3>${esc(l.title || '（内容なし）')}</h3><time>${esc(fmtDate(l.date))}</time></div>
-      <div class="meta"><span>貸した人 <b>${nameH(b, l.lender)}</b></span><span>合計 <b class="num">${yen(KL.loanTotal(l))}</b></span>${rest ? `<span>残り <b class="num">${yen(rest)}</b></span>` : ''}${split}</div>
-      ${l.memo ? `<p class="memo">${esc(l.memo)}</p>` : ''}
+      <div class="meta"><span>貸した人 <b>${nameH(b, l.lender)}</b></span><span>合計 <b class="num">${yen(KL.loanTotal(l))}</b></span>${rest ? `<span>残り <b class="num">${yen(rest)}</b></span>` : ''}${split}${paidTo}${dueTag(l.due, rest)}</div>
+      ${via}${l.memo ? `<p class="memo">${esc(l.memo)}</p>` : ''}
       <ul class="shares">${shares}</ul>${actions}</article>`;
   }
 
@@ -361,6 +400,7 @@
           : x.net < 0 ? `<li><div class="who">あなた<span class="arrow">→</span>${esc(x.who)}${detail}</div><div class="amt out">${yen(-x.net)}</div></li>`
           : `<li><div class="who">${esc(x.who)}${detail}</div><div class="amt zero">差し引き0</div></li>`;
       }).join('')}</ul>` : ''}
+      ${dueList(KL.dueItems([], {}, S.personal, me()), false)}
     </section>`;
     const f = U.pFilter;
     let list = S.personal.slice().sort(sortByDate);
@@ -391,6 +431,7 @@
       <div class="share-main"><div>
         <span class="share-name">${lent ? `あなた<span class="arrow">→</span>${esc(e.who || '（名前なし）')}` : `${esc(e.who || '（名前なし）')}<span class="arrow">→</span>あなた`}</span>
         <div class="figures"><span>${lent ? '貸した' : '借りた'} <span class="num">${yen(e.amount)}</span></span><span>返済 <span class="num">${yen(paid)}</span></span><span class="rest">残り <span class="num">${yen(rest)}</span></span></div>
+        ${dueTag(e.due, rest)}
       </div>${tag}</div>
       ${e.memo ? `<p class="memo">${esc(e.memo)}</p>` : ''}
       ${hist}
@@ -494,6 +535,8 @@
       id: l ? l.id : null, date: l ? l.date || today() : today(), title: l ? l.title : '', memo: l ? l.memo : '',
       mode: l ? l.mode : 'each', total: l && l.total ? String(l.total) : '', includeSelf: l ? l.includeSelf : true,
       selected: l ? l.shares.map((s) => s.to) : [], amounts: {}, paid: {}, createdAt: l ? l.createdAt : 0,
+      due: l ? l.due : '', paidTo: l ? l.paidTo : '', paidToName: l ? l.paidToName : '', via: l ? l.via : null,
+      ltype: 'lend', cvKey: '', cvAmount: '', cvNote: '',
     };
     if (l) l.shares.forEach((s) => { X.amounts[s.to] = String(s.amount); X.paid[s.to] = shareStat(s).paid; });
     openSheet('loan', X);
@@ -505,6 +548,13 @@
     return { total, n, per, rem: total - per * n };
   }
   function loanBody(X, b) {
+    // 肩代わりの記録を直すとき：期限とメモだけ
+    if (X.via) return `<p class="hint">🔁 ${nameH(b, X.via.lender)} への返済を、${nameH(b, X.via.for)} の代わりに返した記録です。直せるのは返す期限とメモだけです（金額を変えたいときは、消してから書き直してください）。</p>
+      ${dueField(X, `${esc(nameIn(b, X.via.for))} があなたに返す期限（なくてもOK）`)}
+      <div class="field"><label for="ld-memo">メモ（なくてもOK）</label><textarea id="ld-memo" maxlength="300" data-bind="sheet.memo">${esc(X.memo)}</textarea></div>
+      ${foot('保存する')}`;
+    const typeSeg = X.id ? '' : `<div><div class="seg"><button type="button" data-act="ld-type" data-v="lend" aria-pressed="${X.ltype === 'lend'}">貸した・立て替えた</button><button type="button" data-act="ld-type" data-v="cover" aria-pressed="${X.ltype === 'cover'}">代わりに返した（肩代わり）</button></div></div>`;
+    if (X.ltype === 'cover') return typeSeg + coverBody(X, b);
     const others = b.members.filter((id) => id !== me());
     X.selected.forEach((id) => { if (!others.includes(id)) others.push(id); });
     const chips = others.length ? `<div class="filters">${others.map((id) => {
@@ -516,7 +566,8 @@
           <div class="yen"><span>¥</span><input id="amt-${esc(id)}" inputmode="numeric" data-bind="sheet.amount" data-key="${esc(id)}" value="${esc(X.amounts[id] || '')}" placeholder="0"></div></div>`).join('')}</div>` : '')
       : `<div class="two"><div class="field"><label for="ld-total">払った合計</label><div class="yen"><span>¥</span><input id="ld-total" inputmode="numeric" data-bind="sheet.total" value="${esc(X.total)}" placeholder="12000"></div></div>
           <label class="check" style="align-self:end"><input type="checkbox" id="ld-self" data-bind="sheet.includeSelf" ${X.includeSelf ? 'checked' : ''}> 自分の分も入れて割る</label></div>`;
-    return `<div class="two">
+    const payChips = others.map((id) => `<button type="button" class="pillbtn" data-act="ld-paidto" data-to="${esc(id)}" aria-pressed="${X.paidTo === id}">${esc(nameIn(b, id))}</button>`).join('');
+    return `${typeSeg}<div class="two">
         <div class="field"><label for="ld-title">なにに貸した？</label><input id="ld-title" maxlength="60" data-bind="sheet.title" value="${esc(X.title)}" placeholder="例：焼肉代・電車代"></div>
         <div class="field"><label for="ld-date">貸した日</label><input id="ld-date" type="date" data-bind="sheet.date" value="${esc(X.date)}"></div>
       </div>
@@ -525,14 +576,56 @@
         <div><div class="seg"><button type="button" data-act="ld-mode" data-v="each" aria-pressed="${X.mode === 'each'}">人ごとに入れる</button><button type="button" data-act="ld-mode" data-v="split" aria-pressed="${X.mode === 'split'}">合計を割り勘</button></div></div>
         ${amounts}<div class="preview" id="sh-preview"></div>
       </fieldset>
+      ${dueField(X)}
+      <fieldset><legend>だれかに払ってあげた？（立て替えたとき・なくてもOK）</legend>
+        <p class="hint">例：A が B に払う分を、あなたが B に払った → 「だれに貸した？」は A、ここは B。</p>
+        <div class="filters">${payChips}</div>
+        <div class="field"><label for="ld-payname">ほか（お店など）</label><input id="ld-payname" maxlength="30" data-bind="sheet.paidToName" value="${esc(X.paidToName)}" placeholder="例：焼肉屋"></div>
+      </fieldset>
       <div class="field"><label for="ld-memo">メモ（なくてもOK）</label><textarea id="ld-memo" maxlength="300" data-bind="sheet.memo" placeholder="例：給料日に返すって">${esc(X.memo)}</textarea></div>
       ${foot('保存する')}`;
+  }
+  // 肩代わり：A が B に借りている分を、あなたが代わりに B に返した
+  function coverBody(X, b) {
+    const cands = coverCandidates(b);
+    const pick = cands.find((x) => `${x.l.id}|${x.s.to}` === X.cvKey);
+    const list = cands.length ? `<div class="choice">${cands.map((x) => `<button type="button" data-act="cv-pick" data-v="${esc(x.l.id + '|' + x.s.to)}" aria-current="${X.cvKey === x.l.id + '|' + x.s.to}">
+        ${esc(nameIn(b, x.s.to))} <span class="arrow">→</span> ${esc(nameIn(b, x.l.lender))}　<b class="num">${yen(x.rest)}</b><small>${esc(x.l.title || '（内容なし）')}・${esc(fmtDate(x.l.date))}${x.l.due ? '・期限 ' + esc(fmtDate(x.l.due)) : ''}</small></button>`).join('')}</div>`
+      : `<p class="hint">いま、ほかの人どうしの返していない借りはありません。<br>まだ記録になっていない分を立て替えたときは「貸した・立て替えた」で、借りた人をえらんで「だれかに払ってあげた？」に払った先を入れてください。</p>`;
+    return `<p class="hint">だれかの借りを、あなたが代わりに返したとき。返した先が「認める」と、その人の借りが減って、代わりにあなたに返すことになります。</p>
+      <fieldset><legend>だれの借りを、代わりに返した？（借りた人 → 貸した人）</legend>${list}</fieldset>
+      ${pick ? `<div class="two">
+        <div class="field"><label for="cv-amount">代わりに返した金額</label><div class="yen"><span>¥</span><input id="cv-amount" inputmode="numeric" data-bind="sheet.cvAmount" value="${esc(X.cvAmount)}"></div></div>
+        <div class="field"><label for="ld-date">返した日</label><input id="ld-date" type="date" data-bind="sheet.date" value="${esc(X.date)}"></div></div>
+        ${dueField(X, `${esc(nameIn(b, pick.s.to))} があなたに返す期限（なくてもOK）`)}
+        <div class="field"><label for="cv-note">ひとこと（なくてもOK）</label><input id="cv-note" maxlength="100" data-bind="sheet.cvNote" value="${esc(X.cvNote)}" placeholder="例：間に合わなかったので代わりに払いました"></div>
+        <div class="preview" id="sh-preview"></div>${foot('記録する')}` : `<div class="row end"><button type="button" class="btn" data-act="sheet-close">やめる</button></div>`}`;
+  }
+  function saveCover() {
+    const X = U.sheet, b = book();
+    const pick = coverCandidates(b).find((x) => `${x.l.id}|${x.s.to}` === X.cvKey);
+    if (!pick) return sheetErr('だれの借りかをえらんでください');
+    const amt = toInt(X.cvAmount);
+    if (amt <= 0) return sheetErr('代わりに返した金額を入れてください');
+    if (amt > pick.rest) return sheetErr(`${nameIn(b, pick.s.to)} の残りは ${yen(pick.rest)} です`);
+    if (!okDate(X.date)) return sheetErr('返した日を入れてください');
+    const A = pick.s.to, B = pick.l.lender;
+    const body = { title: `${nameIn(b, B)}への返済を肩代わり`, date: X.date, memo: (X.cvNote || '').trim(), mode: 'each', total: 0, includeSelf: false, due: X.due || '',
+      shares: [{ to: A, amount: amt, repayments: [] }] };
+    run(KStore.coverDebt(b.id, { loanId: pick.l.id, lender: B, for: A, amount: amt, date: X.date, note: (X.cvNote || '').trim(), title: pick.l.title }, body),
+      `✓ ${nameIn(b, A)} の代わりに ${nameIn(b, B)} に返した記録をつけました`);
+    closeSheet(); U.sub = 'entries'; render();
   }
   function updatePreview() {
     const X = U.sheet, el = $('#sh-preview');
     if (!X || !el) return;
     const b = book();
     if (X.sheetKind !== 'loan') return;
+    if (X.ltype === 'cover') {
+      const pick = coverCandidates(b).find((x) => `${x.l.id}|${x.s.to}` === X.cvKey), amt = toInt(X.cvAmount);
+      if (pick) el.innerHTML = `${esc(nameIn(b, pick.l.lender))} に、${esc(nameIn(b, pick.s.to))} の代わりに <span class="num">${yen(amt)}</span> 返した記録になります。<br>${esc(nameIn(b, pick.l.lender))} が認めると、${esc(nameIn(b, pick.s.to))} の ${esc(nameIn(b, pick.l.lender))} への借りが ${yen(amt)} 減って、${esc(nameIn(b, pick.s.to))} はあなたに ${yen(amt)} 返すことになります。`;
+      return;
+    }
     if (X.mode === 'split') {
       const c = splitCalc(X);
       el.innerHTML = !c ? '相手をえらんで合計を入れると、1人いくらかが出ます。'
@@ -543,6 +636,13 @@
   }
   function saveLoan() {
     const X = U.sheet, b = book();
+    if (X.ltype === 'cover' && !X.id) return saveCover();
+    if (X.via) {
+      const prev = myLoan(X.id);
+      if (!prev) return closeSheet();
+      run(KStore.saveLoan(b.id, X.id, { ...prev, id: undefined, due: X.due || '', memo: X.memo.trim() }), '✓ 直しました');
+      return closeSheet();
+    }
     if (!okDate(X.date)) return sheetErr('貸した日を入れてください');
     if (!X.selected.length) return sheetErr('貸した相手を1人以上えらんでください');
     const amounts = {};
@@ -557,7 +657,8 @@
     for (const id of X.selected) if (X.paid[id] > amounts[id]) return sheetErr(`${nameIn(b, id)} はもう ${yen(X.paid[id])} 返しているので、それより少なくはできません`);
     const prev = X.id ? myLoan(X.id) : null;
     const shares = X.selected.map((id) => ({ to: id, amount: amounts[id], repayments: prev ? ((prev.shares.find((s) => s.to === id) || {}).repayments || []) : [] }));
-    const body = { title: X.title.trim(), date: X.date, memo: X.memo.trim(), mode: X.mode, total: X.mode === 'split' ? toInt(X.total) : 0, includeSelf: X.mode === 'split' && !!X.includeSelf, shares, createdAt: X.createdAt || 0 };
+    const body = { title: X.title.trim(), date: X.date, memo: X.memo.trim(), mode: X.mode, total: X.mode === 'split' ? toInt(X.total) : 0, includeSelf: X.mode === 'split' && !!X.includeSelf, shares, createdAt: X.createdAt || 0,
+      due: X.due || '', paidTo: X.paidTo && !X.selected.includes(X.paidTo) ? X.paidTo : '', paidToName: X.paidTo ? '' : (X.paidToName || '').trim() };
     const isNew = !X.id;
     run(KStore.saveLoan(b.id, X.id, body), isNew ? '✓ 記録しました' : '✓ 直しました');
     closeSheet();
@@ -569,7 +670,7 @@
     const e = id ? S.personal.find((x) => x.id === id) : null;
     openSheet('pentry', {
       id: e ? e.id : null, dir: e ? e.dir : 'lent', who: e ? e.who : '', title: e ? e.title : '', date: e ? e.date || today() : today(),
-      amount: e ? String(e.amount) : '', memo: e ? e.memo : '', paid: e ? entryStat(e).paid : 0, createdAt: e ? e.createdAt : 0,
+      amount: e ? String(e.amount) : '', memo: e ? e.memo : '', paid: e ? entryStat(e).paid : 0, createdAt: e ? e.createdAt : 0, due: e ? e.due : '',
     });
   }
   function pentryBody(X) {
@@ -583,6 +684,7 @@
         <div class="field"><label for="pe-title">なにの？</label><input id="pe-title" maxlength="60" data-bind="sheet.title" value="${esc(X.title)}" placeholder="例：ゲーム代"></div>
         <div class="field"><label for="pe-amount">金額</label><div class="yen"><span>¥</span><input id="pe-amount" inputmode="numeric" data-bind="sheet.amount" value="${esc(X.amount)}" placeholder="0"></div>${X.paid ? `<span class="hint">返済済み ${yen(X.paid)}</span>` : ''}</div>
       </div>
+      ${dueField(X)}
       <div class="field"><label for="pe-memo">メモ（なくてもOK）</label><textarea id="pe-memo" maxlength="300" data-bind="sheet.memo">${esc(X.memo)}</textarea></div>
       ${foot('保存する')}`;
   }
@@ -594,7 +696,7 @@
     if (amount <= 0) return sheetErr('金額を入れてください');
     if (X.paid > amount) return sheetErr(`もう ${yen(X.paid)} 返済しているので、それより少なくはできません`);
     const prev = X.id ? S.personal.find((e) => e.id === X.id) : null;
-    run(KStore.savePersonal(X.id, { dir: X.dir, who: X.who.trim(), title: X.title.trim(), date: X.date, amount, memo: X.memo.trim(), repayments: prev ? prev.repayments : [], createdAt: X.createdAt || 0 }), X.id ? '✓ 直しました' : '✓ 記録しました');
+    run(KStore.savePersonal(X.id, { dir: X.dir, who: X.who.trim(), title: X.title.trim(), date: X.date, amount, memo: X.memo.trim(), due: X.due || '', repayments: prev ? prev.repayments : [], createdAt: X.createdAt || 0 }), X.id ? '✓ 直しました' : '✓ 記録しました');
     closeSheet();
   }
 
@@ -754,12 +856,13 @@
   }
   function approveClaim(id) {
     const b = book(), c = claimsOf(b).find((x) => x.id === id);
-    const l = c && myLoan(c.loanId), s = l && l.shares.find((x) => x.to === c.from);
+    const who = c && (c.for || c.from);
+    const l = c && myLoan(c.loanId), s = l && l.shares.find((x) => x.to === who);
     if (!s) return toast('その記録が見つかりません。「断る」で閉じてください', true);
     const rest = shareStat(s).rest, amt = Math.min(rest, c.amount);
     if (!amt) return;
-    const shares = l.shares.map((x) => ({ ...x, repayments: x.to === c.from ? [...x.repayments, { id: c.id, date: c.date, amount: amt, claim: c.id }] : x.repayments }));
-    run(KStore.approveClaim(b.id, c, shares), rest === amt ? `✓ 認めました。${nameIn(b, c.from)} の分が完済です` : '✓ 認めました');
+    const shares = l.shares.map((x) => ({ ...x, repayments: x.to === who ? [...x.repayments, { id: c.id, date: c.date, amount: amt, claim: c.id, by: c.from }] : x.repayments }));
+    run(KStore.approveClaim(b.id, c, shares), rest === amt ? `✓ 認めました。${nameIn(b, who)} の分が完済です` : '✓ 認めました');
   }
 
   // ---------- 操作 ----------
@@ -811,7 +914,28 @@
       case 'loan-new': loanOpen(null); return;
       case 'loan-edit': U.confirm = null; loanOpen(d.id); return;
       case 'loan-del': U.confirm = { kind: 'loan', id: d.id }; break;
-      case 'loan-del-yes': { const c = U.confirm; U.confirm = null; if (c && myLoan(c.id)) run(KStore.deleteLoan(book().id, c.id), '記録を消しました'); break; }
+      case 'loan-del-yes': {
+        const c = U.confirm; U.confirm = null; const l = c && myLoan(c.id);
+        if (l) {
+          const vc = l.via ? claimsOf(book()).find((x) => x.id === l.via.claimId && x.from === me() && x.status !== 'approved') : null;
+          run(vc ? KStore.deleteCover(book().id, l.id, vc.id) : KStore.deleteLoan(book().id, l.id), '記録を消しました');
+        }
+        break;
+      }
+      case 'cover-cancel': {
+        const c = claimsOf(book()).find((x) => x.id === d.id);
+        if (c) run(KStore.deleteCover(book().id, c.coverLoanId && myLoan(c.coverLoanId) ? c.coverLoanId : '', c.id), c.status === 'rejected' ? '消しました' : '肩代わりを取り消しました');
+        return;
+      }
+      case 'ld-type': if (U.sheet) { U.sheet.ltype = d.v; U.sheet.err = ''; drawSheet(); } return;
+      case 'cv-pick': if (U.sheet) { U.sheet.cvKey = d.v; const p = coverCandidates(book()).find((x) => `${x.l.id}|${x.s.to}` === d.v); if (p) U.sheet.cvAmount = String(p.rest); drawSheet(); } return;
+      case 'ld-paidto': if (U.sheet) { U.sheet.paidTo = U.sheet.paidTo === d.to ? '' : d.to; drawSheet(); } return;
+      case 'due-set': if (U.sheet) {
+        const t = new Date();
+        if (d.v === 'end') { const e = new Date(t.getFullYear(), t.getMonth() + 1, 0); U.sheet.due = ymd(e.getDate() === t.getDate() ? new Date(t.getFullYear(), t.getMonth() + 2, 0) : e); }
+        else if (d.v) { t.setDate(t.getDate() + +d.v); U.sheet.due = ymd(t); } else U.sheet.due = '';
+        drawSheet();
+      } return;
       case 'ld-mode': if (U.sheet) { U.sheet.mode = d.v; drawSheet(); } return;
       case 'ld-toggle': if (U.sheet) { const X = U.sheet, i = X.selected.indexOf(d.to); if (i >= 0) { if (X.paid[d.to] > 0) return; X.selected.splice(i, 1); } else X.selected.push(d.to); drawSheet(); } return;
       case 'pe-dir': if (U.sheet) { U.sheet.dir = d.v; drawSheet(); } return;

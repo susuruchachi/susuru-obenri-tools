@@ -29,6 +29,11 @@
 - 「＋ 帳簿をつくる」→「招待する」で、招待リンク（または招待コード）を送ると、開いた人が参加できる。帳簿はいくつでも作れる
 - 「＋ 貸した記録」：いつ・なにに・だれに・いくら。1人にでも、何人にでもまとめて貸せる
   - 「合計を割り勘」：4人でごはんに行って1人が払ったときなど。合計を入れると1人いくらかを出して、ほかの人の分を記録する（割り切れない分は払った人の分）
+- **返す期限**：貸した記録に期限をつけられる（「1週間後」「2週間後」「月末」ですぐ入る）。「あと何日」「期限すぎ」を出し、「まとめ」に「⏰ 返す期限」の一覧
+- **立て替え**：「だれかに払ってあげた？」で払った先（メンバーかお店など）を残せる。例：A が B に払う分を C が B に払った → C が「A に貸した」、払った先は B
+- **肩代わり**（代わりに返した）：「＋ 貸した記録」→「代わりに返した（肩代わり）」。A が B に借りている記録をえらんで金額を入れると、
+  B への「返したよ」（A の代わりに）と、C → A の貸しをいっしょに書く。B が「認める」と、A の B への借りが減り（返済に「C が肩代わり」と出る）、A は C に返すことになる。
+  B が認めるまでは「確認待ち」、断られたら「断られました」と出る（取り消すと、C → A の貸しも消える）
 - **書けるのは貸した本人だけ**。ほかの人は見るだけ（帳簿をつくった人でも、ほかの人の記録は変えられない。Firestore のルールで決めている）
 - 「返済を記録」：分けて返してもらっても、何回でも記録できる。残りを数えて、ぜんぶ返ってきたら「完済」の印
 - **「返したよ」**：借りた人が「返したよ」を押すと、貸した人に届く（タブに数が出る）。貸した人が「認める」と、その記録に返済として入る。「断る」もできる
@@ -46,7 +51,7 @@
   - さがす：内容・メモ・分類・金額で、ぜんぶの月からさがす
 - **👛 口座**：財布・銀行・電子マネーなど（足せる）。口座ごとの残高と合計、貸し借りを合わせた「ぜんぶ合わせると」
   - **通帳**：口座を押すと、お引出し・お預入れ・残高の通帳の形で出る。「⚖️ 残高を合わせる」でほんとうの残高に直せる（収入・支出には数えない）
-- **🤝 貸し借り**：アプリを使っていない人との貸し借り（貸した・借りた・返済・完済）
+- **🤝 貸し借り**：アプリを使っていない人との貸し借り（貸した・借りた・返済・完済・返す期限）
 - **📈 1年**：月ごとの収入・支出の棒グラフ、1年の合計と1か月の平均、1年で何に使ったか
 - **⚙️ 設定**：予算、**固定費・毎月の収入**（家賃・スマホ代・お小遣いなど。毎月その日になると自動で入る）、分類（足す・直す・消す）、**CSV の書き出し**（家計簿・貸し借り）
 
@@ -86,9 +91,10 @@ tools/icons/       … アイコンを作り直す（bash tools/icons/make-icons
 
 ```
 kashikari_books/{帳簿ID}                 { name, owner, members: [uid], names: { uid: 呼び名 }, createdAt }
-kashikari_books/{帳簿ID}/loans/{id}      { lender, title, date, memo, mode, total, includeSelf, shares: [{ to, amount, repayments }] }
-kashikari_books/{帳簿ID}/claims/{id}     { loanId, lender, from, amount, date, note, status: pending|approved|rejected }
-kashikari_private/{uid}/entries/{id}     自分だけの貸し借り { dir: lent|borrowed, who, title, date, amount, repayments }
+kashikari_books/{帳簿ID}/loans/{id}      { lender, title, date, memo, mode, total, includeSelf, due, paidTo, paidToName, via, shares: [{ to, amount, repayments: [{ id, date, amount, claim, by }] }] }
+                                         （via は肩代わり：{ claimId, loanId, lender: 返した先, for: 代わりに返してあげた人, title }。by は実際に払った人）
+kashikari_books/{帳簿ID}/claims/{id}     { loanId, lender, from, for, coverLoanId, amount, date, note, status: pending|approved|rejected }（for があれば肩代わり）
+kashikari_private/{uid}/entries/{id}     自分だけの貸し借り { dir: lent|borrowed, who, title, date, amount, due, repayments }
 kashikari_private/{uid}/tx/{id}          家計簿 { kind: expense|income|transfer|adjust, date, amount, cat, account, toAccount, dir, title, memo, rec }
                                          （固定費で入ったものは id が rec_{固定費ID}_{年-月}。消した月は設定の skip に覚えて入れ直さない）
 kashikari_private/{uid}/kakeibo/settings 家計簿の設定 { expenseCats, incomeCats, accounts: [{ id, name, icon, initial }], budget: { total, cats }, recurring }
@@ -119,7 +125,7 @@ firebase-config.js が空のあいだは、ページに「⚙️ まだ準備中
 ウェブ版を WebView でそのまま表示するので、画面の中身はウェブ版（main）を更新すれば自動で新しくなります。
 
 - **ホーム画面のウィジェット「貸し借り帳」**（4×2。大きさを変えられる）：返ってくる予定・返す予定の合計（みんなの帳簿ぜんぶ＋自分だけの帳簿）、
-  今月の支出と予算のあと（家計簿）、相手ごとの差し引き、届いた「🔔 返したよ」。押すとアプリが開く（「返したよ」が届いていれば、それを認める画面）
+  今月の支出と予算のあと（家計簿）、⏰ 返す期限（期限すぎ・7日以内の数と、いちばん近いもの。1.5.0 から）、相手ごとの差し引き、届いた「🔔 返したよ」。押すとアプリが開く（「返したよ」が届いていれば、それを認める画面）
   - データはアプリを開いたとき（記録が変わったとき）に届く
 - **Google ログイン**：航海日誌と同じしくみ（アカウントを選ぶ画面。だめなら、ブラウザでログインして戻る）。メールでもログインできる。
   使うウェブ クライアント ID は firebase-config.js から受け取るので、Firebase を変えても APK は作り直さなくてよい
