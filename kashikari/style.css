@@ -304,3 +304,9 @@ fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width:
 .via { font-size: .8rem; color: var(--parchment-dim); background: var(--ink-panel-2); border-radius: 8px; padding: 7px 10px; display: grid; gap: 4px; justify-items: start; }
 .due-input { max-width: 11em; }
 .choice button .num { color: var(--brass-bright); }
+
+/* 家計簿のタブ（6つ：3つずつ2段）・移す先・予定 */
+.kb-tabs { grid-template-columns: repeat(3, 1fr); }
+.mv-row { display: grid; gap: 6px; padding: 8px; border: 1px dashed var(--chart-line); border-radius: 8px; }
+.kb-list .amt.lend { color: var(--brass-bright); }
+.entry.ev .meter.big { margin: 0; }
