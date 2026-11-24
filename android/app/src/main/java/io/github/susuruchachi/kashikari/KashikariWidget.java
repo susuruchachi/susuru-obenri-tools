@@ -61,6 +61,7 @@ public class KashikariWidget extends AppWidgetProvider {
             v.setTextViewText(R.id.w_lines, data.has("signedIn") ? "ログインすると、ここに貸し借りが出ます" : "タップしてアプリを開くと、ここに貸し借りが出ます");
             v.setViewVisibility(R.id.w_claims, View.GONE);
             v.setViewVisibility(R.id.w_month, View.GONE);
+            v.setViewVisibility(R.id.w_due, View.GONE);
             v.setTextViewText(R.id.w_at, "");
         } else {
             v.setTextViewText(R.id.w_in, WidgetData.yen(data.optLong("inSum", 0)));
@@ -74,6 +75,25 @@ public class KashikariWidget extends AppWidgetProvider {
                 if (h > 0) rows = Math.max(1, Math.min(8, (h - 110) / 20));
             } catch (Exception ignored) {}
             if (claims > 0) rows = Math.max(1, rows - 1);
+
+            // 返す期限：期限すぎ・7日以内と、いちばん近いもの
+            JSONObject due = data.optJSONObject("due");
+            if (due != null && (due.optInt("over", 0) > 0 || due.optInt("soon", 0) > 0)) {
+                rows = Math.max(1, rows - 1);
+                SpannableStringBuilder d = new SpannableStringBuilder();
+                int over = due.optInt("over", 0), soon = due.optInt("soon", 0);
+                add(d, "⏰ ", C_SUB, false);
+                if (over > 0) add(d, "期限すぎ " + over + "件 ", C_DANGER, true);
+                if (soon > 0) add(d, "7日以内 " + soon + "件 ", C_BRASS, true);
+                JSONObject n = due.optJSONObject("next");
+                if (n != null) {
+                    int days = n.optInt("days", 0);
+                    add(d, " " + ("in".equals(n.optString("d")) ? n.optString("who") + "→あなた " : "あなた→" + n.optString("who") + " ")
+                        + WidgetData.yen(n.optLong("amt", 0)) + (days < 0 ? "（" + (-days) + "日すぎ）" : days == 0 ? "（今日）" : "（あと" + days + "日）"), C_TEXT, false);
+                }
+                v.setTextViewText(R.id.w_due, d);
+                v.setViewVisibility(R.id.w_due, View.VISIBLE);
+            } else v.setViewVisibility(R.id.w_due, View.GONE);
 
             // 家計簿：今月の支出と、予算のあと
             JSONObject kb = data.optJSONObject("kb");

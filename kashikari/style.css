@@ -296,3 +296,11 @@ fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width:
 .upd-state.new { border-color: var(--brass); color: var(--brass-bright); }
 .upd-state.bad { border-color: var(--danger); color: var(--danger-text); }
 .notes { margin: 0; padding-left: 1.2em; font-size: .8rem; color: var(--parchment-dim); line-height: 1.8; }
+
+/* 返す期限・肩代わり・立て替え */
+.tag.soft { color: var(--parchment-dim); border-color: var(--chart-line); }
+.lines .who .tag, .share-main .tag + .tag { margin-top: 3px; display: inline-block; }
+.share-main > div > .tag { display: inline-block; margin-top: 4px; }
+.via { font-size: .8rem; color: var(--parchment-dim); background: var(--ink-panel-2); border-radius: 8px; padding: 7px 10px; display: grid; gap: 4px; justify-items: start; }
+.due-input { max-width: 11em; }
+.choice button .num { color: var(--brass-bright); }

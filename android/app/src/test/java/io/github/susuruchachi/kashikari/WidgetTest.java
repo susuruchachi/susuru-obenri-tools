@@ -67,6 +67,18 @@ public class WidgetTest {
     }
 
     @Test
+    public void showsDueLine() {
+        AppWidgetManager mgr = AppWidgetManager.getInstance(ctx);
+        int id = shadowOf(mgr).createWidget(KashikariWidget.class, R.layout.widget_kashikari);
+        WidgetData.save(ctx, "{\"signedIn\":true,\"inSum\":3000,\"outSum\":0,\"lines\":[],\"claims\":0,"
+            + "\"due\":{\"over\":1,\"soon\":2,\"next\":{\"d\":\"in\",\"who\":\"弟\",\"amt\":3000,\"due\":\"2026-11-20\",\"days\":-4}}}");
+        View root = shadowOf(mgr).getViewFor(id);
+        assertEquals(View.VISIBLE, root.findViewById(R.id.w_due).getVisibility());
+        String t = text(root, R.id.w_due);
+        assertTrue(t, t.contains("期限すぎ 1件") && t.contains("7日以内 2件") && t.contains("弟→あなた ¥3,000（4日すぎ）"));
+    }
+
+    @Test
     public void signedOut() {
         AppWidgetManager mgr = AppWidgetManager.getInstance(ctx);
         int id = shadowOf(mgr).createWidget(KashikariWidget.class, R.layout.widget_kashikari);
@@ -74,5 +86,6 @@ public class WidgetTest {
         View root = shadowOf(mgr).getViewFor(id);
         assertTrue(text(root, R.id.w_lines).contains("ログイン"));
         assertEquals(View.GONE, root.findViewById(R.id.w_month).getVisibility());
+        assertEquals(View.GONE, root.findViewById(R.id.w_due).getVisibility());
     }
 }

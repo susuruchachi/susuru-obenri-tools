@@ -5,7 +5,7 @@
 // 依存: ledger.js
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。作り直したら上げる）
-const ANDROID_APK_CODE = 5;
+const ANDROID_APK_CODE = 6;
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/susuru-obenri-tools/raw/main/apk/kashikari.apk';
 const ANDROID_APK_SELF_URL = new URL('../apk/kashikari.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
 // いちばん新しい版の情報（{ code, name, date, notes }）。「更新を確認する」で毎回読む（古い画面が残っていても正しくわかるように）
@@ -40,6 +40,7 @@ async function kkFetchLatest() {
 //   inSum / outSum … 返ってくる予定・返す予定の合計（みんなの帳簿ぜんぶ＋自分だけの帳簿）
 //   lines … 相手ごとの差し引き [{ n: 名前, d: 'in'|'out', a: 金額 }]（大きい順に8つまで）
 //   claims … 認めるのを待っている「返したよ」の数（自分が貸した分）
+//   due … 返す期限：{ over: 期限すぎの数, soon: 7日以内の数, next: { d, who, amt, due, days } }（無ければ null）
 function kkBuildWidgetData(st) {
   const me = st.user && st.user.uid;
   if (!me) return { signedIn: false, at: Date.now() };
@@ -62,7 +63,15 @@ function kkBuildWidgetData(st) {
   // 家計簿：今月の支出・収入・予算（{ m: 月, exp, inc, budget } か null）
   let kb = null;
   try { kb = window.__kkKbWidget ? window.__kkKbWidget() : null; } catch (e) {}
-  return { signedIn: true, inSum, outSum, lines: lines.slice(0, 8), claims, kb, today: KL.today(), at: Date.now() };
+  // 返す期限：期限すぎ・7日以内の数と、いちばん近いもの
+  let due = null;
+  try {
+    const items = KL.dueItems(st.books, st.loans, st.personal, me);
+    const over = items.filter((x) => x.days < 0).length, soon = items.filter((x) => x.days >= 0 && x.days <= 7).length;
+    const n = items[0];
+    if (over || soon) due = { over, soon, next: n ? { d: n.d, who: n.who, amt: n.amt, due: n.due, days: n.days } : null };
+  } catch (e) {}
+  return { signedIn: true, inSum, outSum, lines: lines.slice(0, 8), claims, kb, due, today: KL.today(), at: Date.now() };
 }
 
 let _kkWidgetTimer = null, _kkWidgetLast = '';

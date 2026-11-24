@@ -61,9 +61,35 @@ const KL = (() => {
     return Object.values(by).map((x) => ({ ...x, net: x.lent - x.borrowed })).sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
   }
 
+  // 返す期限：今日から何日（過ぎていればマイナス。期限なしは null）
+  const daysLeft = (d) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d || '')) return null;
+    const a = new Date(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)), t = new Date(); t.setHours(0, 0, 0, 0);
+    return Math.round((a - t) / 86400000);
+  };
+  // 期限のある、まだ返っていない貸し借り（自分がかかわるもの）：[{ d: in|out, who, amt, due, days, title, book }]（期限の近い順）
+  function dueItems(books, loansByBook, personal, me) {
+    const out = [];
+    (books || []).forEach((b) => (loansByBook[b.id] || []).forEach((l) => {
+      if (!l.due) return;
+      l.shares.forEach((s) => {
+        const r = shareStat(s).rest;
+        if (!r || s.to === l.lender) return;
+        if (l.lender === me) out.push({ d: 'in', who: b.names[s.to] || 'だれか', amt: r, due: l.due, days: daysLeft(l.due), title: l.title, book: b.name });
+        else if (s.to === me) out.push({ d: 'out', who: b.names[l.lender] || 'だれか', amt: r, due: l.due, days: daysLeft(l.due), title: l.title, book: b.name });
+      });
+    }));
+    (personal || []).forEach((e) => {
+      const r = entryStat(e).rest;
+      if (!e.due || !r) return;
+      out.push({ d: e.dir === 'lent' ? 'in' : 'out', who: e.who || '（名前なし）', amt: r, due: e.due, days: daysLeft(e.due), title: e.title, personal: true });
+    });
+    return out.sort((x, y) => x.due.localeCompare(y.due));
+  }
+
   const yen = (n) => '¥' + Math.round(n || 0).toLocaleString('ja-JP');
   const pad = (n) => String(n).padStart(2, '0');
   const today = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
-  return { shareStat, loanTotal, loanRest, owedMatrix, owed, myNets, pairNets, entryStat, personalNets, yen, today };
+  return { shareStat, loanTotal, loanRest, owedMatrix, owed, myNets, pairNets, entryStat, personalNets, daysLeft, dueItems, yen, today };
 })();

@@ -34,7 +34,8 @@
   // ---- 読んだデータを整える（ほかの人が書いたものなので、形を確かめる）----
   const num = (v) => (typeof v === 'number' && isFinite(v) && v >= 0 ? Math.round(v) : 0);
   const str = (v, n) => (typeof v === 'string' ? v.slice(0, n || 200) : '');
-  const reps = (a) => (Array.isArray(a) ? a.filter((r) => r && typeof r === 'object').map((r) => ({ id: str(r.id, 40), date: str(r.date, 10), amount: num(r.amount), claim: str(r.claim, 40) })) : []);
+  const reps = (a) => (Array.isArray(a) ? a.filter((r) => r && typeof r === 'object').map((r) => ({ id: str(r.id, 40), date: str(r.date, 10), amount: num(r.amount), claim: str(r.claim, 40), by: str(r.by, 128) })) : []);
+  const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : '');
   function cleanBook(id, v) {
     v = v || {};
     const names = {};
@@ -46,6 +47,9 @@
     return {
       id, lender: str(v.lender, 128), title: str(v.title, 60), date: str(v.date, 10), memo: str(v.memo, 300),
       mode: v.mode === 'split' ? 'split' : 'each', total: num(v.total), includeSelf: !!v.includeSelf,
+      due: day(v.due), paidTo: str(v.paidTo, 128), paidToName: str(v.paidToName, 30),
+      // 肩代わり（ほかの人の借りを代わりに返した）：{ claimId, loanId, lender: 返した先, for: 代わりに返してあげた人, title: 元の記録 }
+      via: v.via && typeof v.via === 'object' ? { claimId: str(v.via.claimId, 40), loanId: str(v.via.loanId, 40), lender: str(v.via.lender, 128), for: str(v.via.for, 128), title: str(v.via.title, 60) } : null,
       shares: Array.isArray(v.shares) ? v.shares.filter((s) => s && typeof s.to === 'string').map((s) => ({ to: s.to, amount: num(s.amount), repayments: reps(s.repayments) })) : [],
       createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
     };
@@ -54,7 +58,7 @@
     v = v || {};
     return {
       id, loanId: str(v.loanId, 40), lender: str(v.lender, 128), from: str(v.from, 128), amount: num(v.amount), date: str(v.date, 10),
-      note: str(v.note, 100), status: ['approved', 'rejected'].includes(v.status) ? v.status : 'pending', createdAt: num(v.createdAt), decidedAt: num(v.decidedAt),
+      note: str(v.note, 100), for: str(v.for, 128), coverLoanId: str(v.coverLoanId, 40), status: ['approved', 'rejected'].includes(v.status) ? v.status : 'pending', createdAt: num(v.createdAt), decidedAt: num(v.decidedAt),
     };
   }
   function cleanTx(id, v) {
@@ -69,7 +73,7 @@
     v = v || {};
     return {
       id, dir: v.dir === 'borrowed' ? 'borrowed' : 'lent', who: str(v.who, 30), title: str(v.title, 60), date: str(v.date, 10), memo: str(v.memo, 300),
-      amount: num(v.amount), repayments: reps(v.repayments), createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
+      amount: num(v.amount), repayments: reps(v.repayments), due: day(v.due), createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
     };
   }
 
@@ -287,6 +291,24 @@
       await bookRef(bookId).collection('claims').doc().set(clean({ ...c, from: user.uid, status: 'pending', createdAt: now(), decidedAt: 0 }));
     },
     async deleteClaim(bookId, claimId) { need(); await bookRef(bookId).collection('claims').doc(claimId).delete(); },
+    // 肩代わり：ほかの人（for）の借り（lender の記録 loanId）を、自分が代わりに返した
+    //   → lender への「返したよ」（for の代わりに）と、自分 → for の貸しを、いっしょに書く（lender が認めると for の借りが減る）
+    async coverDebt(bookId, c, loanBody) {
+      need();
+      const claimRef = bookRef(bookId).collection('claims').doc(), loanRef = bookRef(bookId).collection('loans').doc();
+      const b = db.batch();
+      b.set(claimRef, clean({ loanId: c.loanId, lender: c.lender, for: c.for, coverLoanId: loanRef.id, from: user.uid, amount: c.amount, date: c.date, note: c.note || '', status: 'pending', createdAt: now(), decidedAt: 0 }));
+      b.set(loanRef, clean({ ...loanBody, via: { claimId: claimRef.id, loanId: c.loanId, lender: c.lender, for: c.for, title: c.title || '' }, lender: user.uid, createdAt: now(), updatedAt: now() }));
+      await b.commit();
+    },
+    // 肩代わりを取り消す：自分の貸しと、まだ決まっていない（断られた）返したよを消す
+    async deleteCover(bookId, loanId, claimId) {
+      need();
+      const b = db.batch();
+      if (loanId) b.delete(bookRef(bookId).collection('loans').doc(loanId));
+      if (claimId) b.delete(bookRef(bookId).collection('claims').doc(claimId));
+      await b.commit();
+    },
     // 認める：貸した記録に返済を入れて、返したよを「認めた」にする（まとめて1回で書く）
     async approveClaim(bookId, claim, shares) {
       need();
