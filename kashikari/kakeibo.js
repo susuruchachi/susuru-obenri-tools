@@ -98,18 +98,20 @@ const Kakeibo = (ctx) => {
         const nm = (id) => b.names[id] || 'だれか', base = `b:${b.id}:${l.id}`, ttl = l.title || '（内容なし）';
         if (l.lender === me) {
           const lent = l.shares.filter((x) => x.to !== me).reduce((a, x) => a + x.amount, 0);
-          add(`${base}:out`, { kind: 'lendout', date: l.date, amount: lent, title: `${l.shares.map((x) => nm(x.to)).join('・')} に貸した`, sub: `${ttl}・${b.name}` });
+          if (!l.handoff) add(`${base}:out`, { kind: 'lendout', date: l.date, amount: lent, title: `${l.shares.map((x) => nm(x.to)).join('・')} に貸した`, sub: `${ttl}・${b.name}` });
           if (l.mode === 'split' && l.includeSelf && l.total) add(`${base}:self`, { kind: 'expense', date: l.date, amount: Math.max(0, l.total - lent), title: `${ttl}（自分の分）`, sub: `割り勘・${b.name}`, cat: L.cat });
-          l.shares.forEach((x) => x.repayments.forEach((rp) => add(`${base}:r:${rp.id}`, {
+          // 付け替え（rp.handoff）はお金が動いていないので入れない。付け替えでできた貸し（l.handoff）も、貸したときはお金が動いていない
+          l.shares.forEach((x) => x.repayments.forEach((rp) => !rp.handoff && add(`${base}:r:${rp.id}`, {
             kind: 'lendin', date: rp.date, amount: rp.amount, title: rp.by && rp.by !== x.to ? `${nm(rp.by)} から返ってきた（${nm(x.to)} の肩代わり）` : `${nm(x.to)} から返ってきた`, sub: `${ttl}・${b.name}`,
           })));
         } else {
           const mine = l.shares.find((x) => x.to === me);
           if (!mine) return;
           // 借りた：肩代わりはお金が動いていないので入れない。割り勘・立て替えは支出（立て替えてもらった）、そのほかは現金で借りた
-          const defAs = l.via ? 'off' : (l.mode === 'split' || l.paidTo || l.paidToName) ? 'expense' : 'cash';
-          add(`${base}:in`, { kind: 'lendin', canAs: true, defAs, date: l.date, amount: mine.amount, title: defAs === 'expense' ? `${ttl}（${nm(l.lender)} が立て替え）` : `${nm(l.lender)} から借りた`, sub: `${ttl}・${b.name}` });
-          mine.repayments.forEach((rp) => { if (!rp.by || rp.by === me) add(`${base}:r:${rp.id}`, { kind: 'lendout', date: rp.date, amount: rp.amount, title: `${nm(l.lender)} に返した`, sub: `${ttl}・${b.name}` }); });
+          // 付け替えで引き受けた借り：自分の出費（奢りなど）として入れるのがはじめ
+          const defAs = l.via ? 'off' : l.handoff ? 'expense' : (l.mode === 'split' || l.paidTo || l.paidToName) ? 'expense' : 'cash';
+          add(`${base}:in`, { kind: 'lendin', canAs: true, defAs, date: l.date, amount: mine.amount, title: l.handoff ? `${nm(l.handoff.from)} の分を引き受けた（${nm(l.lender)} に返す）` : defAs === 'expense' ? `${ttl}（${nm(l.lender)} が立て替え）` : `${nm(l.lender)} から借りた`, sub: `${ttl}・${b.name}` });
+          mine.repayments.forEach((rp) => { if (rp.handoff) return; if (!rp.by || rp.by === me) add(`${base}:r:${rp.id}`, { kind: 'lendout', date: rp.date, amount: rp.amount, title: `${nm(l.lender)} に返した`, sub: `${ttl}・${b.name}` }); });
         }
       }));
       (S.personal || []).forEach((e) => {

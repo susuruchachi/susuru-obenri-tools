@@ -48,6 +48,10 @@
   const book = () => S.books.find((b) => b.id === U.bookId) || S.books[0] || null;
   const loansOf = (b) => (b ? S.loans[b.id] || [] : []);
   const claimsOf = (b) => (b ? S.claims[b.id] || [] : []);
+  const handoffsOf = (b) => (b ? S.handoffs[b.id] || [] : []);
+  const pendHandoff = (b, loanId, from) => handoffsOf(b).find((h) => h.status === 'pending' && h.loanId === loanId && h.from === from);
+  // 自分が返事をする付け替え（代わりに返す人として・貸した人として）
+  const handoffNeedsMe = (h) => h.status === 'pending' && ((h.to === me() && !h.toOk) || (h.lender === me() && !h.lenderOk));
   const nameIn = (b, id) => (b && b.names[id]) || 'だれか';
   const nameH = (b, id) => esc(nameIn(b, id)) + (id === me() ? '<span class="faint">（あなた）</span>' : '');
   const defaultNick = () => { const u = S.user || {}; return (u.name || (u.email || '').split('@')[0] || '').slice(0, 20); };
@@ -131,6 +135,7 @@
     $('#main').innerHTML = viewMain();
     if (f) { const el = document.getElementById(f.id); if (el) { el.focus(); try { if (f.s != null) el.setSelectionRange(f.s, f.e); } catch (e) {} } }
     kkApkSetIdle(!U.sheet && !U.repay && !U.claimForm);
+    autoApplyHandoffs();
   }
   function syncLabel() {
     if (!S.authReady) return '☁️ …';
@@ -143,6 +148,7 @@
   const pendingForMe = () => {
     const out = [];
     S.books.forEach((b) => (S.claims[b.id] || []).forEach((c) => { if (c.lender === me() && c.status === 'pending') out.push({ b, c }); }));
+    S.books.forEach((b) => (S.handoffs[b.id] || []).forEach((h) => { if (handoffNeedsMe(h)) out.push({ b, h }); }));
     return out;
   };
 
@@ -220,7 +226,7 @@
         <p class="hint">${b.owner === me() ? '途中で止まったようです。「続きを消す」を押してください。' : 'つくった人が消しています。もう書けません。'}</p>
         ${b.owner === me() ? '<div class="row end"><button class="btn danger small" data-act="delbook-go">続きを消す</button></div>' : ''}</div></section>`;
     }
-    h += viewClaimsToMe(b) + viewMyClaims(b);
+    h += viewClaimsToMe(b) + viewHandoffs(b) + viewMyClaims(b);
     h += `<section class="sec">
       <div class="row between">
         <div class="subtabs" role="tablist">
@@ -322,9 +328,17 @@
     const shares = l.shares.map((s) => {
       const { paid, rest: r } = shareStat(s);
       const myClaim = claims.find((c) => (c.for || c.from) === s.to);
-      const tag = r === 0 ? '<span class="tag ok">完済</span>' : myClaim ? '<span class="tag wait">確認待ち</span>' : paid ? '<span class="tag part">一部返済</span>' : '<span class="tag due">まだ</span>';
+      const ph = r > 0 ? pendHandoff(b, l.id, s.to) : null;
+      const moved = s.repayments.filter((rp) => rp.handoff).reduce((a, rp) => a + rp.amount, 0);
+      const tag = r === 0 ? (moved && moved === paid ? '<span class="tag ok">付け替え済み</span>' : '<span class="tag ok">完済</span>') : myClaim ? '<span class="tag wait">確認待ち</span>' : ph ? '<span class="tag wait">付け替え待ち</span>' : paid ? '<span class="tag part">一部返済</span>' : '<span class="tag due">まだ</span>';
       const hist = s.repayments.length ? `<ul class="history">${s.repayments.map((rp) => {
         const conf = U.confirm && U.confirm.kind === 'rep' && U.confirm.id === l.id && U.confirm.to === s.to && U.confirm.rid === rp.id;
+        if (rp.handoff) {
+          const hc = U.confirm && U.confirm.kind === 'hundo' && U.confirm.id === rp.handoff;
+          return `<li><span class="mono">${esc(fmtDate(rp.date))}</span><span class="num">${yen(rp.amount)}</span>🔁 ${nameH(b, rp.moveTo)} に付け替え
+            ${mine ? (hc ? `<span class="confirm"><span>付け替えを取り消す？（${esc(nameIn(b, rp.moveTo))} への貸しの記録も消えます）</span><button class="btn small danger" data-act="ho-undo-yes">取り消す</button><button class="btn small" data-act="confirm-no">やめる</button></span>`
+              : `<button class="x" data-act="ho-undo" data-id="${esc(rp.handoff)}">取り消す</button>`) : ''}</li>`;
+        }
         return `<li><span class="mono">${esc(fmtDate(rp.date))}</span><span class="num">${yen(rp.amount)}</span>返済${rp.by && rp.by !== s.to ? `（${esc(nameIn(b, rp.by))} が肩代わり）` : rp.claim ? '（返したよ）' : ''}
           ${mine ? (conf ? `<span class="confirm"><span>取り消す？</span><button class="btn small danger" data-act="rep-del-yes">取り消す</button><button class="btn small" data-act="confirm-no">やめる</button></span>`
             : `<button class="x" data-act="rep-del" data-id="${esc(l.id)}" data-to="${esc(s.to)}" data-rid="${esc(rp.id)}">取り消す</button>`) : ''}</li>`;
@@ -332,12 +346,13 @@
       let act = '';
       if (mine && r > 0) {
         act = U.repay && U.repay.scope === 'loan' && U.repay.id === l.id && U.repay.to === s.to ? repayForm(r)
-          : `<div class="row"><button class="btn small" data-act="repay-open" data-id="${esc(l.id)}" data-to="${esc(s.to)}">返済を記録</button></div>`;
+          : `<div class="row"><button class="btn small" data-act="repay-open" data-id="${esc(l.id)}" data-to="${esc(s.to)}">返済を記録</button>${ph || l.handoff ? '' : `<button class="btn small" data-act="ho-new" data-id="${esc(l.id)}" data-from="${esc(s.to)}">🔁 ほかの人に付け替え</button>`}</div>`;
       } else if (s.to === me() && r > 0) {
         act = myClaim ? (myClaim.for ? `<p class="hint">${nameH(b, myClaim.from)} があなたの代わりに ${yen(myClaim.amount)} 返したよ（肩代わり）。${nameH(b, l.lender)} が認めると返済に入り、その分は ${nameH(b, myClaim.from)} に返すことになります。</p>`
             : `<p class="hint">「返したよ」（${yen(myClaim.amount)}）を出しました。${nameH(b, l.lender)} が認めると返済に入ります。</p>`)
           : U.claimForm && U.claimForm.loanId === l.id ? claimForm(r)
-          : `<div class="row"><button class="btn small" data-act="claim-open" data-id="${esc(l.id)}">返したよ</button></div>`;
+          : ph ? `<p class="hint">🔁 ${nameH(b, ph.to)} に付け替えを頼んでいます（${ph.toOk ? `${esc(nameIn(b, ph.to))} は引き受けました` : `${esc(nameIn(b, ph.to))} の返事待ち`}・${ph.lenderOk ? `${esc(nameIn(b, l.lender))} はOK` : `${esc(nameIn(b, l.lender))} の返事待ち`}）。</p>`
+          : `<div class="row"><button class="btn small" data-act="claim-open" data-id="${esc(l.id)}">返したよ</button><button class="btn small" data-act="ho-new" data-id="${esc(l.id)}">🔁 ほかの人に返してもらう</button></div>`;
       }
       return `<li class="share">
         <div class="share-main"><div><span class="share-name">${nameH(b, s.to)}</span>
@@ -349,14 +364,19 @@
     const via = l.via ? `<div class="via">🔁 ${nameH(b, l.via.lender)} への返済（${esc(l.via.title || '（内容なし）')}）を、${nameH(b, l.via.for)} の代わりに返した
       ${vc ? (vc.status === 'pending' ? `<span class="tag wait">${esc(nameIn(b, l.via.lender))} の確認待ち</span>` : vc.status === 'rejected' ? `<span class="tag due">${esc(nameIn(b, l.via.lender))} に断られました</span>` : '<span class="tag ok">認められました</span>') : ''}
       ${vc && vc.status === 'rejected' && mine ? '<p class="hint">まちがいなら「消す」で取り消せます。</p>' : ''}</div>` : '';
+    const hoc = l.handoff && U.confirm && U.confirm.kind === 'hundo' && U.confirm.id === l.handoff.id;
+    const ho = l.handoff ? `<div class="via">🔁 ${nameH(b, l.handoff.from)} の借り（${esc(l.handoff.title || '（内容なし）')}）を、${l.shares.map((x) => nameH(b, x.to)).join('・')} が代わりに返すことになりました（付け替え）</div>` : '';
     const paidTo = l.paidTo || l.paidToName ? `<span>払った先 <b>${l.paidTo ? nameH(b, l.paidTo) : esc(l.paidToName)}</b>（立て替え）</span>` : '';
-    const actions = mine ? `<div class="row end">${conf
+    const actions = mine && l.handoff ? `<div class="row end">${hoc
+      ? `<span class="confirm"><span>付け替えを取り消しますか？（${esc(nameIn(b, l.handoff.from))} の借りにもどります）</span><button class="btn small danger" data-act="ho-undo-yes">取り消す</button><button class="btn small" data-act="confirm-no">やめる</button></span>`
+      : `<button class="btn small" data-act="loan-edit" data-id="${esc(l.id)}">直す</button><button class="btn small danger" data-act="ho-undo" data-id="${esc(l.handoff.id)}">付け替えを取り消す</button>`}</div>`
+      : mine ? `<div class="row end">${conf
       ? `<span class="confirm"><span>この記録を消しますか？（返済の記録${vc && vc.status !== 'approved' ? '・返したよ' : ''}も消えます）</span><button class="btn small danger" data-act="loan-del-yes">消す</button><button class="btn small" data-act="confirm-no">やめる</button></span>`
       : `<button class="btn small" data-act="loan-edit" data-id="${esc(l.id)}">直す</button><button class="btn small danger" data-act="loan-del" data-id="${esc(l.id)}">消す</button>`}</div>` : '';
     return `<article class="entry${done ? ' done' : ''}">${done ? '<div class="stamp">完済</div>' : ''}
       <div class="entry-head"><h3>${esc(l.title || '（内容なし）')}</h3><time>${esc(fmtDate(l.date))}</time></div>
       <div class="meta"><span>貸した人 <b>${nameH(b, l.lender)}</b></span><span>合計 <b class="num">${yen(KL.loanTotal(l))}</b></span>${rest ? `<span>残り <b class="num">${yen(rest)}</b></span>` : ''}${split}${paidTo}${dueTag(l.due, rest)}</div>
-      ${via}${l.memo ? `<p class="memo">${esc(l.memo)}</p>` : ''}
+      ${via}${ho}${l.memo ? `<p class="memo">${esc(l.memo)}</p>` : ''}
       <ul class="shares">${shares}</ul>${actions}</article>`;
   }
 
@@ -383,6 +403,136 @@
       <div class="row"><span class="hint">残り ${yen(rest)}</span><span class="grow"></span>
         <button type="button" class="btn small" data-act="claim-cancel">やめる</button><button class="btn small primary" type="submit">返したよを送る</button></div>
     </form>`;
+  }
+
+  // ---------- 🔁 付け替え（借りている人の代わりに、ほかのメンバーが返す）----------
+  // 例：A が B に奢ってもらうはずが、B が用意できず C・D が A に貸した → A が「B に返してもらう」を頼む
+  //     B が引き受けて、C・D（貸した人）が OK すると、C・D の記録の A の分が「B に付け替え」になり、C・D → B の貸しの記録ができる
+  //     貸した人が自分で付け替えを頼むこともできる（そのときは B が引き受ければ付け替わる）
+  function myHandoffCands(b) {
+    return loansOf(b).filter((l) => l.lender !== me()).map((l) => ({ l, s: l.shares.find((x) => x.to === me()) }))
+      .filter(({ l, s }) => s && shareStat(s).rest > 0 && !pendHandoff(b, l.id, me()) && !claimsOf(b).some((c) => c.loanId === l.id && c.status === 'pending' && (c.for || c.from) === me()))
+      .map(({ l, s }) => ({ l, rest: shareStat(s).rest })).sort((x, y) => (x.l.date || '').localeCompare(y.l.date || ''));
+  }
+  function handoffCands(X, b) {
+    if (X.lenderMode) { const l = myLoan(X.loanId), s = l && l.shares.find((x) => x.to === X.from); return s && shareStat(s).rest > 0 ? [{ l, rest: shareStat(s).rest }] : []; }
+    return myHandoffCands(b);
+  }
+  function openHandoff(loanId, from) {
+    const b = book(), l = loansOf(b).find((x) => x.id === loanId);
+    if (!l) return;
+    const lenderMode = l.lender === me(), X = { loanId, from: lenderMode ? from : me(), lenderMode, picks: {}, to: '', note: '' };
+    const c = handoffCands(X, b).find((x) => x.l.id === loanId);
+    if (!c) { toast('その借りは、いま付け替えられません（返したよ・付け替えの返事待ちかも）', true); return; }
+    X.picks[loanId] = String(c.rest);
+    openSheet('handoff', X);
+  }
+  function handoffPreview(X, b) {
+    const cands = handoffCands(X, b), picked = cands.filter((c) => X.picks[c.l.id] !== undefined);
+    const sum = picked.reduce((a, c) => a + Math.min(toInt(X.picks[c.l.id]), c.rest), 0);
+    if (!X.to || !picked.length) return '';
+    const lenders = [...new Set(picked.map((c) => c.l.lender))].map((id) => esc(nameIn(b, id))).join('・');
+    return `${nameH(b, X.to)} が ${lenders} に <b class="num">${yen(sum)}</b> 返すことになり、${nameH(b, X.from)} の借りはその分なくなります。`;
+  }
+  function handoffBody(X, b) {
+    const cands = handoffCands(X, b);
+    const lenders = new Set(cands.filter((c) => X.picks[c.l.id] !== undefined).map((c) => c.l.lender));
+    const people = b.members.filter((id) => id !== X.from && !(X.lenderMode && id === me()));
+    return `<p class="hint">${X.lenderMode ? `${nameH(b, X.from)} の借りを、ほかのメンバーが代わりに返すことにします。その人が「引き受ける」を押すと付け替わります。`
+        : 'あなたの借りを、ほかのメンバーに代わりに返してもらうよう頼みます（奢ってもらうはずだった人など）。引き受ける人と、貸した人の両方が OK すると付け替わります。'}</p>
+      <fieldset><legend>だれに返してもらう？</legend><div class="filters">${people.map((id) => `<button type="button" class="pillbtn" data-act="ho-to" data-v="${esc(id)}" aria-pressed="${X.to === id}" ${lenders.has(id) ? 'disabled title="貸した人には付け替えられません"' : ''}>${esc(nameIn(b, id))}</button>`).join('')}</div></fieldset>
+      <fieldset><legend>${X.lenderMode ? '付け替える借り' : 'どの借り？（いくつでも）'}</legend>${cands.length ? `<ul class="ho-list">${cands.map((c) => { const on = X.picks[c.l.id] !== undefined; return `<li>
+        <label class="check"><input type="checkbox" data-act="ho-pick" data-id="${esc(c.l.id)}" ${on ? 'checked' : ''} ${X.lenderMode ? 'disabled' : ''}> ${nameH(b, c.l.lender)}・${esc(c.l.title || '（内容なし）')}<small>${esc(fmtDate(c.l.date))}・残り ${yen(c.rest)}</small></label>
+        ${on ? `<div class="yen"><span>¥</span><input id="ho-amt-${esc(c.l.id)}" inputmode="numeric" data-bind="sheet.hamt" data-key="${esc(c.l.id)}" value="${esc(X.picks[c.l.id])}" aria-label="付け替える額"></div>` : ''}</li>`; }).join('')}</ul>` : '<p class="hint">付け替えられる借りがありません。</p>'}</fieldset>
+      <div class="field"><label for="ho-note">ひとこと（なくてもOK）</label><input id="ho-note" maxlength="100" data-bind="sheet.note" value="${esc(X.note)}" placeholder="例：奢ってくれるはずだった分、おねがい"></div>
+      <div class="preview" id="ho-preview">${handoffPreview(X, b)}</div>
+      ${foot(X.lenderMode ? '付け替えを頼む' : '頼む')}`;
+  }
+  function submitHandoff() {
+    const X = U.sheet, b = book();
+    if (!X.to) return sheetErr('だれに返してもらうかをえらんでください');
+    const picked = handoffCands(X, b).filter((c) => X.picks[c.l.id] !== undefined);
+    if (!picked.length) return sheetErr('付け替える借りをえらんでください');
+    const list = [];
+    for (const c of picked) {
+      const amt = toInt(X.picks[c.l.id]);
+      if (amt <= 0) return sheetErr(`${nameIn(b, c.l.lender)}（${c.l.title || '内容なし'}）の額を入れてください`);
+      if (amt > c.rest) return sheetErr(`${nameIn(b, c.l.lender)}（${c.l.title || '内容なし'}）は、残り ${yen(c.rest)} までです`);
+      if (c.l.lender === X.to) return sheetErr(`${nameIn(b, X.to)} は貸した人なので、付け替えられません`);
+      list.push({ loanId: c.l.id, lender: c.l.lender, from: X.from, to: X.to, amount: amt, note: X.note.trim(), title: c.l.title || '' });
+    }
+    run(KStore.askHandoffs(b.id, list), `✓ ${nameIn(b, X.to)} に付け替えを頼みました（${list.length}件）`);
+    closeSheet();
+  }
+  function handoffRow(b, h, who) {
+    const t = `${esc(h.title || '（内容なし）')}${h.note ? `・「${esc(h.note)}」` : ''}`;
+    const st = (ok, nm, no) => (ok ? `<span class="tag ok">${esc(nm)} OK</span>` : no ? `<span class="tag due">${esc(nm)} が断りました</span>` : `<span class="tag wait">${esc(nm)} の返事待ち</span>`);
+    if (who === 'to') return `<div class="claim"><div><b>${nameH(b, h.from)}</b> の代わりに、<b>${nameH(b, h.lender)}</b> に <span class="num" style="color:var(--brass-bright)">${yen(h.amount)}</span> 返してほしい <span class="tag part">付け替え</span></div>
+      <div class="sub">${t}・${h.by === h.lender ? `${esc(nameIn(b, h.lender))} から` : `${esc(nameIn(b, h.from))} から`}のお願い${h.lenderOk ? '' : `・${esc(nameIn(b, h.lender))} の返事待ち`}</div>
+      <div class="row end"><button class="btn small danger" data-act="ho-to-no" data-id="${esc(h.id)}">断る</button><button class="btn small primary" data-act="ho-to-yes" data-id="${esc(h.id)}">引き受ける</button></div></div>`;
+    if (who === 'lender') return `<div class="claim"><div><b>${nameH(b, h.from)}</b> の借り <span class="num" style="color:var(--brass-bright)">${yen(h.amount)}</span> を、<b>${nameH(b, h.to)}</b> が代わりに返すことにしたい <span class="tag part">付け替え</span></div>
+      <div class="sub">${t}・${h.toOk ? `${esc(nameIn(b, h.to))} は引き受けました` : `${esc(nameIn(b, h.to))} の返事待ち`}</div>
+      <div class="row end"><button class="btn small danger" data-act="ho-len-no" data-id="${esc(h.id)}">断る</button><button class="btn small primary" data-act="ho-len-yes" data-id="${esc(h.id)}">いいよ</button></div></div>`;
+    const ended = h.status === 'declined' || h.status === 'rejected';
+    return `<div class="claim"><div>${h.from === me() ? 'あなた' : nameH(b, h.from)} の借り（${nameH(b, h.lender)}・${t}）<span class="num">${yen(h.amount)}</span> を <b>${nameH(b, h.to)}</b> に</div>
+      <div class="row between"><span>${st(h.toOk, nameIn(b, h.to), h.status === 'declined')} ${st(h.lenderOk, nameIn(b, h.lender), h.status === 'rejected')}</span>
+        ${h.by === me() || h.from === me() ? `<button class="btn small" data-act="ho-del" data-id="${esc(h.id)}">${ended ? '消す' : '取り消す'}</button>` : ''}</div></div>`;
+  }
+  function viewHandoffs(b) {
+    const list = handoffsOf(b).slice().sort((x, y) => x.createdAt - y.createdAt);
+    const toMe = list.filter(handoffNeedsMe);
+    const waiting = list.filter((h) => !toMe.includes(h) && h.status !== 'done' && (h.by === me() || h.from === me() || (h.status === 'pending' && (h.to === me() || h.lender === me()))));
+    let out = '';
+    if (toMe.length) out += `<section class="sec"><div class="notice"><h3>🔁 付け替えのお願いが届いています</h3>${toMe.map((h) => handoffRow(b, h, h.to === me() && !h.toOk ? 'to' : 'lender')).join('')}
+      <p class="hint">引き受ける人と貸した人の両方が OK すると、貸した人の記録で付け替わります。</p></div></section>`;
+    if (waiting.length) out += `<section class="sec"><div class="notice quiet"><h3>⏳ 付け替え</h3>${waiting.map((h) => handoffRow(b, h, 'wait')).join('')}</div></section>`;
+    return out;
+  }
+  // 貸した人の端末で：両方 OK になった付け替えを、記録に入れる
+  const applying = new Set();
+  function applyHandoff(b, h) {
+    if (applying.has(h.id)) return;
+    applying.add(h.id);
+    const l = loansOf(b).find((x) => x.id === h.loanId && x.lender === me()), s = l && l.shares.find((x) => x.to === h.from);
+    const amt = s ? Math.min(h.amount, shareStat(s).rest) : 0;
+    if (!amt) { run(KStore.lenderHandoff(b.id, h.id, false)); return; }
+    const shares = l.shares.map((x) => (x.to === h.from ? { ...x, repayments: [...x.repayments, { id: 'h_' + h.id, date: today(), amount: amt, handoff: h.id, moveTo: h.to }] } : x));
+    const body = { title: `${l.title || '（内容なし）'}（${nameIn(b, h.from)}の分）`.slice(0, 60), date: today(), mode: 'each', total: 0, includeSelf: false, due: l.due || '', paidTo: '', paidToName: '',
+      memo: h.note || '', via: null, shares: [{ to: h.to, amount: amt, repayments: [] }], handoff: { id: h.id, loanId: l.id, from: h.from, title: l.title || '' } };
+    run(KStore.applyHandoff(b.id, h, shares, body), `🔁 ${nameIn(b, h.from)} の分 ${yen(amt)} を ${nameIn(b, h.to)} に付け替えました`).then((ok) => { if (!ok) applying.delete(h.id); });
+  }
+  function autoApplyHandoffs() {
+    if (!S.user) return;
+    S.books.forEach((b) => { if (!b.closing) (S.handoffs[b.id] || []).forEach((h) => { if (h.status === 'pending' && h.lender === me() && h.lenderOk && h.toOk) applyHandoff(b, h); }); });
+  }
+  // 付け替えを取り消す（貸した人）：元の記録の付け替えを外し、新しい貸しの記録と付け替えを消す
+  function undoHandoff(id) {
+    const b = book();
+    const orig = loansOf(b).find((l) => l.lender === me() && l.shares.some((x) => x.repayments.some((rp) => rp.handoff === id)));
+    const nl = loansOf(b).find((l) => l.lender === me() && l.handoff && l.handoff.id === id);
+    if (nl && nl.shares.some((x) => shareStat(x).paid)) { toast('付け替えたあとの返済が入っているので取り消せません（先に返済を取り消してください）', true); return; }
+    const shares = orig ? orig.shares.map((x) => ({ ...x, repayments: x.repayments.filter((rp) => rp.handoff !== id) })) : null;
+    run(KStore.undoHandoff(b.id, { loanId: orig ? orig.id : '', shares, newLoanId: nl ? nl.id : '', handoffId: handoffsOf(b).some((h) => h.id === id) ? id : '' }), '付け替えを取り消しました');
+  }
+  function handoffClick(a, d) {
+    const b = book(), X = U.sheet;
+    switch (a) {
+      case 'ho-new': openHandoff(d.id, d.from); return true;
+      case 'ho-to': if (X) { X.to = d.v; drawSheet(); } return true;
+      case 'ho-pick': if (X && !X.lenderMode) { const c = handoffCands(X, b).find((x) => x.l.id === d.id); if (X.picks[d.id] !== undefined) delete X.picks[d.id]; else if (c) X.picks[d.id] = String(c.rest); if (X.to && c && c.l.lender === X.to) X.to = ''; drawSheet(); } return true;
+      case 'ho-to-yes': run(KStore.answerHandoff(b.id, d.id, true), '✓ 引き受けました'); return true;
+      case 'ho-to-no': run(KStore.answerHandoff(b.id, d.id, false), '断りました'); return true;
+      case 'ho-len-yes': {
+        const h = handoffsOf(b).find((x) => x.id === d.id);
+        if (h && h.toOk) applyHandoff(b, h); else run(KStore.lenderHandoff(b.id, d.id, true), '✓ OK しました（引き受ける人の返事を待っています）');
+        return true;
+      }
+      case 'ho-len-no': run(KStore.lenderHandoff(b.id, d.id, false), '断りました'); return true;
+      case 'ho-del': run(KStore.deleteHandoff(b.id, d.id), '付け替えのお願いを消しました'); return true;
+      case 'ho-undo': U.confirm = { kind: 'hundo', id: d.id }; render(); return true;
+      case 'ho-undo-yes': { const c = U.confirm; U.confirm = null; if (c && c.kind === 'hundo') undoHandoff(c.id); render(); return true; }
+      default: return false;
+    }
   }
 
   // ---------- 💳 家族のカード（親のカードで、きょうだいが昼食などを買う）----------
@@ -669,7 +819,7 @@
     else if (kind === 'rename') U.sheet = { ...base, nick: b ? b.names[me()] || '' : '' };
     else if (kind === 'renamebook') U.sheet = { ...base, name: b ? b.name : '' };
     else if (kind === 'loan') U.sheet = { ...base, ...extra };
-    else if (kind === 'pentry' || KB.has(kind) || ['card', 'creport', 'charge', 'cphoto'].includes(kind)) U.sheet = { ...base, ...extra, sheetKind: kind };
+    else if (kind === 'pentry' || KB.has(kind) || ['card', 'creport', 'charge', 'cphoto', 'handoff'].includes(kind)) U.sheet = { ...base, ...extra, sheetKind: kind };
     else if (kind === 'delbook') U.sheet = { ...base, confirmName: '' };
     else U.sheet = base;
     drawSheet();
@@ -688,7 +838,7 @@
     const box = $('#sheet');
     if (!U.sheet) { box.innerHTML = ''; return; }
     const k = U.sheet.sheetKind;
-    const title = KB.has(k) ? KB.title(k) : { card: U.sheet.id ? '💳 カードを直す' : '💳 カードを登録する', creport: U.sheet.id ? '🧾 報告を直す' : '🧾 使ったのを報告', charge: U.sheet.id ? '明細を直す' : '明細を入れる', cphoto: '📷 レシート', appinfo: '⚙️ アプリと更新', delbook: '帳簿を消す', leavebook: '帳簿から抜ける', newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
+    const title = KB.has(k) ? KB.title(k) : { card: U.sheet.id ? '💳 カードを直す' : '💳 カードを登録する', creport: U.sheet.id ? '🧾 報告を直す' : '🧾 使ったのを報告', charge: U.sheet.id ? '明細を直す' : '明細を入れる', cphoto: '📷 レシート', handoff: '🔁 ほかの人に返してもらう（付け替え）', appinfo: '⚙️ アプリと更新', delbook: '帳簿を消す', leavebook: '帳簿から抜ける', newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
     box.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title" data-form="sheet">
       <div class="sheet-head"><h2 id="sh-title">${title}</h2><button type="button" class="close" data-act="sheet-close" aria-label="閉じる">×</button></div>
       ${KB.has(k) ? KB.sheetBody(k) : sheetBody(k)}
@@ -740,6 +890,7 @@
       <div class="row end"><button type="button" class="btn danger" data-act="logout">ログアウト</button></div>`;
     if (k === 'appinfo') return appInfoBody();
     if (['card', 'creport', 'charge', 'cphoto'].includes(k)) return cardSheetBody(k, X, b);
+    if (k === 'handoff') return handoffBody(X, b);
     if (k === 'delbook') return `
       <p class="hint">「${esc(b.name)}」と、中の記録（${loansOf(b).length}件）・返したよを<b>ぜんぶ消します</b>。参加しているみんなの画面からも消えて、もとに戻せません。</p>
       <p class="hint">消すときは、下に帳簿の名前「${esc(b.name)}」を打ってください。</p>
@@ -760,7 +911,7 @@
       id: l ? l.id : null, date: l ? l.date || today() : today(), title: l ? l.title : '', memo: l ? l.memo : '',
       mode: l ? l.mode : 'each', total: l && l.total ? String(l.total) : '', includeSelf: l ? l.includeSelf : true,
       selected: l ? l.shares.map((s) => s.to) : [], amounts: {}, paid: {}, createdAt: l ? l.createdAt : 0,
-      due: l ? l.due : '', paidTo: l ? l.paidTo : '', paidToName: l ? l.paidToName : '', via: l ? l.via : null,
+      due: l ? l.due : '', paidTo: l ? l.paidTo : '', paidToName: l ? l.paidToName : '', via: l ? l.via : null, handoff: l ? l.handoff : null,
       ltype: 'lend', cvKey: '', cvAmount: '', cvNote: '',
     };
     if (l) l.shares.forEach((s) => { X.amounts[s.to] = String(s.amount); X.paid[s.to] = shareStat(s).paid; });
@@ -773,6 +924,11 @@
     return { total, n, per, rem: total - per * n };
   }
   function loanBody(X, b) {
+    // 付け替えの記録を直すとき：期限とメモだけ
+    if (X.handoff) return `<p class="hint">🔁 ${nameH(b, X.handoff.from)} の借りを付け替えた記録です。直せるのは返す期限とメモだけです（やめるときは「付け替えを取り消す」）。</p>
+      ${dueField(X, '返す期限（なくてもOK）')}
+      <div class="field"><label for="ld-memo">メモ（なくてもOK）</label><textarea id="ld-memo" maxlength="300" data-bind="sheet.memo">${esc(X.memo)}</textarea></div>
+      ${foot('保存する')}`;
     // 肩代わりの記録を直すとき：期限とメモだけ
     if (X.via) return `<p class="hint">🔁 ${nameH(b, X.via.lender)} への返済を、${nameH(b, X.via.for)} の代わりに返した記録です。直せるのは返す期限とメモだけです（金額を変えたいときは、消してから書き直してください）。</p>
       ${dueField(X, `${esc(nameIn(b, X.via.for))} があなたに返す期限（なくてもOK）`)}
@@ -862,7 +1018,7 @@
   function saveLoan() {
     const X = U.sheet, b = book();
     if (X.ltype === 'cover' && !X.id) return saveCover();
-    if (X.via) {
+    if (X.via || X.handoff) {
       const prev = myLoan(X.id);
       if (!prev) return closeSheet();
       run(KStore.saveLoan(b.id, X.id, { ...prev, id: undefined, due: X.due || '', memo: X.memo.trim() }), '✓ 直しました');
@@ -950,6 +1106,7 @@
     if (X.sheetKind === 'pentry') return savePentry();
     if (X.sheetKind === 'delbook') return deleteBook();
     if (['card', 'creport', 'charge'].includes(X.sheetKind)) return submitCardSheet(X.sheetKind);
+    if (X.sheetKind === 'handoff') return submitHandoff();
     if (X.sheetKind === 'newbook') {
       const name = X.name.trim(), nick = X.nick.trim();
       if (!name) return sheetErr('帳簿の名前を入れてください');
@@ -1099,6 +1256,7 @@
     if (key === 'amount' && root === 'sheet' && U.sheet.sheetKind === 'loan') U.sheet.amounts[t.dataset.key] = t.value;
     else if (key === 'cat' && root === 'sheet' && U.sheet.sheetKind === 'kb-budget') U.sheet.cats[t.dataset.key] = t.value;
     else if (key === 'mv' && root === 'sheet' && U.sheet.moves) U.sheet.moves[+t.dataset.key].amount = t.value;
+    else if (key === 'hamt' && root === 'sheet' && U.sheet.picks) { U.sheet.picks[t.dataset.key] = t.value; const pv = $('#ho-preview'); if (pv) pv.innerHTML = handoffPreview(U.sheet, book()); }
     else o[key] = t.type === 'checkbox' ? t.checked : t.value;
     if (root === 'sheet') { updatePreview(); KB.afterDraw(); }
     if (root === 'kb') render();
@@ -1210,7 +1368,7 @@
       case 'page-reload': location.reload(); return;
       case 'leave-yes': { const b = book(); if (b) { run(KStore.leaveBook(b.id), `「${b.name}」から抜けました`); U.bookId = ''; store('kashikari-book', null); } closeSheet(); return; }
       case 'delbook-go': deleteBook(); return;
-      default: { if (cardClick(a, d)) return; const r = KB.click(a, d); if (r === 'render') break; return; }
+      default: { if (cardClick(a, d)) return; if (handoffClick(a, d)) return; const r = KB.click(a, d); if (r === 'render') break; return; }
     }
     render();
     if (a === 'repay-open' || a === 'prepay-open' || a === 'claim-open') setTimeout(() => { const i = $('#rp-amount') || $('#cl-amount'); if (i) { i.focus(); i.select(); } }, 40);

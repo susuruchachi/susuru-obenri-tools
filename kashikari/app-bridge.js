@@ -54,6 +54,7 @@ function kkBuildWidgetData(st) {
       lines.push({ n: (b.names[x.id] || 'だれか') + (many ? `（${b.name}）` : ''), d: x.net > 0 ? 'in' : 'out', a: Math.abs(x.net) });
     });
     claims += (st.claims[b.id] || []).filter((c) => c.lender === me && c.status === 'pending').length;
+    claims += ((st.handoffs || {})[b.id] || []).filter((h) => h.status === 'pending' && ((h.to === me && !h.toOk) || (h.lender === me && !h.lenderOk))).length;
   });
   KL.personalNets(st.personal).forEach((x) => {
     inSum += x.lent; outSum += x.borrowed;
