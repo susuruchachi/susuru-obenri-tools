@@ -58,6 +58,8 @@ const Kakeibo = (ctx) => {
       events: Array.isArray(k.events) ? k.events : [],
       // 航海日誌との連携コード（kashikari_links/{code}）
       link: typeof k.link === 'string' ? k.link : '',
+      // 🎁 ほしい物：[{ id, name, icon, price, prio: 1〜3, when: 買う予定の日, cat, url, memo, saved: 貯まっている額, status: want|bought|gaveup, doneDate, paid, txId, createdAt }]
+      wishes: Array.isArray(k.wishes) ? k.wishes : [],
     };
   }
   const saveSettings = (next, msg) => run(KStore.saveKb(next), msg);
@@ -186,18 +188,19 @@ const Kakeibo = (ctx) => {
     return { inc, exp, byCat, lout, lin };
   }
 
-  const KB = { sub: 'month', month: curYM(), year: curYM().slice(0, 4), cat: '', search: '', acct: '', evOpen: '', evAll: false, evFor: '', showOff: false };
+  const KB = { wishDone: '', sub: 'month', month: curYM(), year: curYM().slice(0, 4), cat: '', search: '', acct: '', evOpen: '', evAll: false, evFor: '', showOff: false };
 
   // ---------- 画面 ----------
   function view(lendView) {
     const S = ctx.S();
     const tab = (v, t) => `<button role="tab" data-act="kb-sub" data-v="${v}" aria-selected="${KB.sub === v}">${t}</button>`;
-    let h = `<section class="sec"><div class="kb-tabs" role="tablist">${tab('month', '📅 家計簿')}${tab('accounts', '👛 口座')}${tab('events', '🎟 予定')}${tab('lend', '🤝 貸し借り')}${tab('year', '📈 1年')}${tab('settings', '⚙️ 設定')}</div></section>`;
+    let h = `<section class="sec"><div class="kb-tabs" role="tablist">${tab('month', '📅 家計簿')}${tab('accounts', '👛 口座')}${tab('events', '🎟 予定')}${tab('wish', '🎁 ほしい物')}${tab('lend', '🤝 貸し借り')}${tab('year', '📈 1年')}${tab('settings', '⚙️ 設定')}</div></section>`;
     if (KB.sub === 'lend') return h + lendView();
     if (!S.txReady || !S.kbReady) return h + `<section class="sec"><p class="empty">読み込み中…</p></section>`;
     if (KB.sub === 'accounts') return h + viewAccounts();
     if (KB.sub === 'year') return h + viewYear();
     if (KB.sub === 'events') return h + viewEvents();
+    if (KB.sub === 'wish') return h + viewWish();
     if (KB.sub === 'settings') return h + viewSettings();
     return h + (KB.month === curYM() ? warnBlock() : '') + viewMonth();
   }
@@ -491,6 +494,8 @@ const Kakeibo = (ctx) => {
     if (k === 'kb-vlink') return '🤝 貸し借りの記録';
     if (k === 'kb-event') return X.id ? '🎟 予定を直す' : '🎟 予定を足す';
     if (k === 'kb-lendset') return '🤝 貸し借りを家計簿に入れる';
+    if (k === 'kb-wish') return X.id ? '🎁 ほしい物を直す' : '🎁 ほしい物を足す';
+    if (k === 'kb-wsave') return '💰 貯まっている額';
     return k === 'kb-tx' && X.id ? '記録を直す' : titles[k];
   };
 
@@ -506,7 +511,7 @@ const Kakeibo = (ctx) => {
       id: t ? t.id : null, kind: k, amount: t ? String(t.amount) : '', date: t ? t.date : (KB.month === curYM() ? today() : `${KB.month}-01`),
       cat: t ? t.cat : (k === 'income' ? s.incomeCats[0].id : (KB.cat || s.expenseCats[0].id)),
       account: t ? t.account : (KB.acct || l.account || s.accounts[0].id), toAccount: t ? t.toAccount : (l.toAccount || (s.accounts[1] || s.accounts[0]).id),
-      title: t ? t.title : '', memo: t ? t.memo : '', rec: t ? t.rec : '', shift: t ? t.shift : '', moves: [], event: t ? t.event : (KB.evFor || ''), from: t ? t.from : '', base: t ? t.base : 0, shifted: t ? t.shifted : 0, createdAt: t ? t.createdAt : 0, del: false,
+      title: t ? t.title : '', memo: t ? t.memo : '', rec: t ? t.rec : '', shift: t ? t.shift : '', moves: [], event: t ? t.event : (KB.evFor || ''), from: t ? t.from : '', base: t ? t.base : 0, shifted: t ? t.shifted : 0, createdAt: t ? t.createdAt : 0, wish: '', del: false,
     });
   }
   function openAdjust(acctId, t) {
@@ -538,6 +543,20 @@ const Kakeibo = (ctx) => {
     if (k === 'kb-tx') {
       const seg = (v, t) => `<button type="button" data-act="kb-kind" data-v="${v}" aria-pressed="${X.kind === v}">${t}</button>`;
       const recentTitles = [...new Set(txs().filter((t) => t.kind === X.kind && t.title).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map((t) => t.title))].slice(0, 30);
+      const wsh = X.wish && !X.id ? settings().wishes.find((w) => w.id === X.wish) : null;
+      if (wsh) return `<p class="hint">🎁 「${esc(wsh.name)}」を買ったことにして、支出として家計簿に入れます。ほしい物リストでは「買った物」に移ります。</p>
+        <div class="two">
+          <div class="field"><label for="kb-amount">払った額</label><div class="yen"><span>¥</span><input id="kb-amount" inputmode="text" data-bind="sheet.amount" value="${esc(X.amount)}" placeholder="0"></div><span class="hint" id="kb-calc"></span></div>
+          <div class="field"><label for="kb-date">買った日</label><input id="kb-date" type="date" data-bind="sheet.date" value="${esc(X.date)}"></div>
+        </div>
+        <fieldset><legend>分類</legend>${chips(s.expenseCats, 'kb-pick-cat', X.cat)}</fieldset>
+        <fieldset><legend>どこから払った？</legend>${chips(s.accounts, 'kb-pick-acct', X.account)}</fieldset>
+        ${eventField(X)}
+        <div class="two">
+          <div class="field"><label for="kb-title">内容・お店</label><input id="kb-title" maxlength="60" data-bind="sheet.title" value="${esc(X.title)}"></div>
+          <div class="field"><label for="kb-memo">メモ（なくてもOK）</label><input id="kb-memo" maxlength="300" data-bind="sheet.memo" value="${esc(X.memo)}"></div>
+        </div>
+        ${ctx.foot('🛒 買った')}`;
       return `<div><div class="seg">${seg('expense', '支出')}${seg('income', '収入')}${seg('transfer', '振替')}</div></div>
         <div class="two">
           <div class="field"><label for="kb-amount">金額（1200+300 のような足し算もOK）</label><div class="yen"><span>¥</span><input id="kb-amount" inputmode="text" data-bind="sheet.amount" value="${esc(X.amount)}" placeholder="0"></div><span class="hint" id="kb-calc"></span></div>
@@ -583,6 +602,8 @@ const Kakeibo = (ctx) => {
     if (k === 'kb-vlink') return vlinkBody();
     if (k === 'kb-event') return eventBody();
     if (k === 'kb-lendset') return lendsetBody();
+    if (k === 'kb-wish') return wishBody();
+    if (k === 'kb-wsave') return wsaveBody();
     if (k === 'kb-rec') {
       const seg = (v, t) => `<button type="button" data-act="kb-rkind" data-v="${v}" aria-pressed="${X.kind === v}">${t}</button>`;
       return `<div><div class="seg">${seg('expense', '支出')}${seg('income', '収入')}</div></div>
@@ -608,6 +629,7 @@ const Kakeibo = (ctx) => {
     if (X && pv && X.sheetKind === 'kb-shift') { const r = settings().recurring.find((y) => y.id === X.rec); if (r) pv.innerHTML = shiftPreview(X, r); }
     if (X && X.kind && el) el.textContent = hasOp(X.amount) ? `＝ ${yen(calc(X.amount))}` : '';
     if (X && X.sheetKind === 'kb-event' && el) el.textContent = hasOp(X.budget) ? `＝ ${yen(calc(X.budget))}` : '';
+    if (X && (X.sheetKind === 'kb-wish' || X.sheetKind === 'kb-wsave') && el) { const v = X.sheetKind === 'kb-wish' ? X.price : X.saved; el.textContent = hasOp(v) ? `＝ ${yen(calc(v))}` : ''; }
   }
 
   function submit(k, more) {
@@ -623,6 +645,14 @@ const Kakeibo = (ctx) => {
       saveSettings({ ...s, events: X.id ? s.events.map((x) => (x.id === X.id ? e : x)) : [...s.events, e] }, '✓ 予定を保存しました');
       return ctx.closeSheet();
     }
+    if (k === 'kb-wish') return submitWish();
+    if (k === 'kb-wsave') {
+      const w = s.wishes.find((x) => x.id === X.id);
+      if (!w) return ctx.closeSheet();
+      const saved = calc(X.saved);
+      saveSettings({ ...s, wishes: s.wishes.map((x) => (x.id === X.id ? { ...x, saved } : x)) }, saved >= w.price && w.price ? `✓ 「${w.name}」の分が貯まりました ✦` : '✓ 貯まっている額を保存しました');
+      return ctx.closeSheet();
+    }
     if (k === 'kb-lendset') { const L = settings().lend; saveSettings({ ...s, lend: { ...L, on: !!X.on, account: X.account, cat: X.cat, since: X.since || '' } }, '✓ 保存しました'); return ctx.closeSheet(); }
     if (k === 'kb-tx') {
       const amount = calc(X.amount);
@@ -636,6 +666,16 @@ const Kakeibo = (ctx) => {
       if (X.from && X.kind === 'transfer') body.from = X.from;
       if (X.kind === 'expense' && X.event) body.event = X.event;
       const label = X.id ? '✓ 直しました' : `✓ ${X.kind === 'income' ? '収入' : X.kind === 'transfer' ? '振替' : '支出'} ${yen(amount)} を入れました`;
+      if (!X.id && X.wish) {
+        const w = s.wishes.find((x) => x.id === X.wish);
+        if (!w) return ctx.sheetErr('そのほしい物はもうありません');
+        if (X.kind !== 'expense') return ctx.sheetErr('支出として入れてください');
+        const id = KStore.newKbId('tx');
+        run(KStore.kbBatch([{ op: 'set', col: 'tx', id, body }]), `🛒 「${w.name}」を買いました（${yen(amount)}）`);
+        saveSettings({ ...s, wishes: s.wishes.map((x) => (x.id === w.id ? { ...x, status: 'bought', doneDate: X.date, paid: amount, txId: id } : x)) });
+        KB.month = X.date.slice(0, 7);
+        return ctx.closeSheet();
+      }
       if (!X.id && X.kind === 'income' && (X.moves || []).length) {
         const id = KStore.newKbId('tx'), mv = moveTx(X, amount, id, X.date, X.title.trim() || catOf('income', X.cat).name);
         if (mv.err) return ctx.sheetErr(mv.err);
@@ -707,6 +747,7 @@ const Kakeibo = (ctx) => {
     else if (sk === 'kb-rec') saveSettings({ ...s, recurring: s.recurring.filter((r) => r.id !== X.id) }, '固定費を消しました');
     else if (sk === 'kb-shift') { const x = shifts().find((y) => y.id === X.id); if (x) deleteShift(x); }
     else if (sk === 'kb-event') saveSettings({ ...s, events: s.events.filter((e) => e.id !== X.id) }, '予定を消しました');
+    else if (sk === 'kb-wish') saveSettings({ ...s, wishes: s.wishes.filter((w) => w.id !== X.id) }, 'ほしい物を消しました（家計簿の記録は残ります）');
     ctx.closeSheet();
   }
 
@@ -772,6 +813,27 @@ const Kakeibo = (ctx) => {
         return 'done';
       }
       case 'kb-csv': exportCsv(d.v); return 'done';
+      case 'kb-wish-edit': openWish(d.id); return 'done';
+      case 'kb-wish-prio': if (X) { X.prio = +d.v; ctx.drawSheet(); } return 'done';
+      case 'kb-wish-cat': if (X) { X.cat = X.cat === d.v ? '' : d.v; ctx.drawSheet(); } return 'done';
+      case 'kb-wish-save': { const w = s.wishes.find((x) => x.id === d.id); if (w) ctx.openSheet('kb-wsave', { id: w.id, saved: w.saved ? String(w.saved) : '' }); return 'done'; }
+      case 'kb-wish-buy': {
+        const w = s.wishes.find((x) => x.id === d.id);
+        if (!w) return 'done';
+        openTx('expense', null);
+        const X2 = ctx.U().sheet;
+        if (X2) { X2.wish = w.id; X2.amount = w.price ? String(w.price) : ''; X2.title = w.name; X2.date = today(); if (w.cat && s.expenseCats.some((c) => c.id === w.cat)) X2.cat = w.cat; X2.event = ''; ctx.drawSheet(); }
+        return 'done';
+      }
+      case 'kb-wish-status': {
+        const w = s.wishes.find((x) => x.id === d.id);
+        if (!w) return 'done';
+        const next = d.v === 'want' ? { ...w, status: 'want', doneDate: '', paid: 0, txId: '' } : { ...w, status: d.v, doneDate: today() };
+        saveSettings({ ...s, wishes: s.wishes.map((x) => (x.id === w.id ? next : x)) }, d.v === 'want' ? `「${w.name}」を、ほしい物にもどしました` : `「${w.name}」をあきらめました。${w.price ? yen(w.price) + ' 浮きました ✦' : ''}`);
+        if (X && X.sheetKind === 'kb-wish') ctx.closeSheet();
+        return 'render';
+      }
+      case 'kb-wish-done': KB.wishDone = KB.wishDone === d.v ? '' : d.v; return 'render';
       default: return '';
     }
   }
@@ -988,6 +1050,7 @@ const Kakeibo = (ctx) => {
   // 今の口座の合計から、これから入るお金（定期の収入・航海日誌の「入るお金」）と出ていくお金（定期の支払い・後払い・返す期限・予定の予算）を
   // 日付の順にたどる。返ってくる予定のお金は、返ってこないこともあるので数えない（足りなくなるのを早めに知らせるため）
   const HORIZON = 60;
+  const wishesWant = () => settings().wishes.filter((w) => (w.status || 'want') === 'want');
   const koukaiEvents = () => { const L = ctx.S().link; return L && Array.isArray(L.koukai) ? L.koukai.filter((e) => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date || '')) : []; };
   function forecastItems(days) {
     const s = settings(), S = ctx.S(), now = today(), to = addDays(now, days || HORIZON), out = [];
@@ -1020,6 +1083,11 @@ const Kakeibo = (ctx) => {
       if (d > to) return;
       if (e.budget) out.push({ date: d, amount: -e.budget, title: e.title || '（名前なし）', src: '⚓ 航海日誌' });
       if (e.income) out.push({ date: d, amount: +e.income, title: e.title || '（名前なし）', src: '⚓ 航海日誌（入るお金）' });
+    });
+    wishesWant().forEach((w) => {
+      if (!w.when || !w.price) return;
+      const d = w.when > now ? w.when : now;
+      if (d <= to) out.push({ date: d, amount: -w.price, title: w.name, src: '🎁 ほしい物（買う予定）', wid: w.id });
     });
     // 同じ日は、出ていく方を先に（足りなくなるのを見のがさない）
     return out.sort((a, b) => a.date.localeCompare(b.date) || a.amount - b.amount);
@@ -1075,6 +1143,9 @@ const Kakeibo = (ctx) => {
       if (evEnd(e) < from) return;
       out.push({ id: `e_${e.id}`, date: e.date, end: e.end || '', kind: 'event', amount: e.budget || 0, title: `🎟 ${e.name}${e.budget ? `（予算 ${yen(e.budget)}）` : ''}`, note: `使った ${yen(evSpent(e))}${e.memo ? '・' + e.memo : ''}` });
     });
+    wishesWant().forEach((w) => {
+      if (w.when) out.push({ id: `w_${w.id}`, date: w.when, kind: 'wish', amount: w.price || 0, title: `🎁 ${w.name}を買う${w.price ? `（${yen(w.price)}）` : ''}`, note: `ほしい物${w.saved ? `・貯めた ${yen(w.saved)}` : ''}${w.memo ? '・' + w.memo : ''}` });
+    });
     return out.filter((x) => x.date >= from && x.date <= to).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 400);
   }
   let pubTimer = null, pubLast = '';
@@ -1116,6 +1187,141 @@ const Kakeibo = (ctx) => {
       <ul class="lines">${list.map((e) => `<li><div class="who">${esc(e.title || '（名前なし）')}<small>${esc(md(e.date))}${e.end && e.end !== e.date ? '〜' + esc(md(e.end)) : ''}${(e.end || e.date) < now ? '・おわった' : ''}</small></div>
         <div class="amt">${e.budget ? `<span class="out">予算 ${yen(e.budget)}</span>` : ''}${e.budget && e.income ? '<br>' : ''}${e.income ? `<span class="in">入る ${yen(e.income)}</span>` : ''}</div></li>`).join('')}</ul>
       <p class="hint">直すときは航海日誌で。</p></section>`;
+  }
+
+  // ---------- 🎁 ほしい物リスト ----------
+  // 値段・ほしさ（★1〜3）・買う予定の日・貯まっている額・お店のページ。これからのお金の見通しから「いつなら買っても足りるか」を出す
+  // 買う予定の日を入れたものは、見通し（足りなくなりそうなら警告）と航海日誌のカレンダーにも入る
+  const PRIO = { 3: 'とてもほしい', 2: 'ほしい', 1: 'いつか' };
+  const stars = (p) => '★'.repeat(p) + '☆'.repeat(3 - p);
+  const prioOf = (w) => Math.min(3, Math.max(1, +w.prio || 2));
+  const safeUrl = (u) => (/^https?:\/\/[^\s"'<>]+$/i.test(String(u || '').trim()) ? String(u).trim() : '');
+  // その物を買うとしたら：いつから買っても見通しの間お金が足りるか、今買うといつ足りなくなるか、予定の日に買うとどうか
+  function wishPlan(w, f) {
+    const now = today(), need = w.price || 0, pts = [];
+    let bal = f.start;
+    f.items.forEach((x) => { if (x.wid === w.id) return; bal += x.amount; pts.push({ date: x.date, bal, title: x.title }); });
+    // 買わなくても足りなくなるとき（ほかの支払いや予定のせい）は、そちらを先に知らせる
+    const neg = f.start < 0 ? { date: now, title: 'いまの口座の合計' } : pts.find((p) => p.bal < 0);
+    if (neg) return { base: { date: neg.date, title: neg.title } };
+    const n = pts.length, suf = new Array(n + 1);
+    suf[n] = Infinity;
+    for (let i = n - 1; i >= 0; i--) suf[i] = Math.min(pts[i].bal, suf[i + 1]);
+    // その日に買ったときの、その日からあとのいちばん少ない残高（買う前）。お金の動く日は、その日の動きのあとに買うとして数える
+    // （今日は、いまの残高からも引く。お金の動かない日は、前の日までの残高からも引く）
+    const low = (d) => {
+      let i = 0, prev = f.start;
+      while (i < n && pts[i].date < d) { prev = pts[i].bal; i++; }
+      return d === now || !(i < n && pts[i].date === d) ? Math.min(prev, suf[i]) : suf[i];
+    };
+    const days = [now, ...new Set(pts.map((p) => p.date).filter((d) => d > now))];
+    const okDate = days.find((d) => low(d) >= need) || '';
+    let short = null;
+    if (okDate !== now) {
+      if (f.start < need) short = { date: now, short: need - f.start };
+      else { const j = pts.findIndex((p) => p.bal < need); if (j >= 0) short = { date: pts[j].date, short: need - pts[j].bal }; }
+    }
+    const atWhen = w.when ? low(w.when > now ? w.when : now) - need : null;
+    return { okDate, short, atWhen };
+  }
+  function wishCard(w, f) {
+    const p = prioOf(w), price = w.price || 0, saved = Math.min(w.saved || 0, price || w.saved || 0), rest = Math.max(0, price - saved), url = safeUrl(w.url);
+    const n = w.when ? KL.daysLeft(w.when) : null;
+    const when = w.when ? `<span class="tag ${n < 0 ? 'due' : n <= 7 ? 'part' : 'soft'}">🛒 ${esc(md(w.when))}に買う予定・${n < 0 ? `${-n}日すぎ` : n === 0 ? '今日' : `あと${n}日`}</span>` : '';
+    let afford = '';
+    if (price) {
+      const pl = wishPlan(w, f);
+      afford = pl.base ? `<p class="afford ng">⚠️ 買わなくても、${esc(md(pl.base.date))}ごろお金が足りなくなりそうです<small>「${esc(pl.base.title)}」のところで。先にそちらを見直すと、いつ買えるかが出ます</small></p>`
+        : pl.okDate === today() ? `<p class="afford ok">✓ いま買っても、${HORIZON}日のあいだお金は足りそう</p>`
+        : pl.okDate ? `<p class="afford wait">⏳ ${esc(md(pl.okDate))}ごろからなら、買っても足りそう${pl.short ? `<small>いま買うと、${esc(md(pl.short.date))}ごろ ${yen(pl.short.short)} たりなくなります</small>` : ''}</p>`
+        : `<p class="afford ng">✗ ${HORIZON}日のうちに買うと、お金が足りなくなりそう${pl.short ? `<small>いま買うと、${esc(md(pl.short.date))}ごろ ${yen(pl.short.short)} たりなくなります</small>` : ''}</p>`;
+      if (!pl.base && pl.atWhen !== null && pl.okDate !== today()) afford += `<p class="afford ${pl.atWhen >= 0 ? 'ok' : 'ng'}">${pl.atWhen >= 0 ? '✓' : '⚠️'} 予定の日（${esc(md(w.when > today() ? w.when : today()))}）に買うと、${pl.atWhen >= 0 ? '足りそう' : `${yen(-pl.atWhen)} たりなくなりそう`}</p>`;
+    }
+    let pace = '';
+    if (w.when && rest && w.when > today()) {
+      const months = Math.max(1, (+w.when.slice(0, 4) * 12 + +w.when.slice(5, 7)) - (+today().slice(0, 4) * 12 + +today().slice(5, 7)));
+      pace = `・1か月 ${yen(Math.ceil(rest / months))} ずつ貯めれば間に合います`;
+    }
+    return `<article class="entry wish p${p}"><div class="entry-head"><h3>${esc(w.icon || '🎁')} ${esc(w.name)}</h3><span class="num wish-price">${price ? yen(price) : '値段まだ'}</span></div>
+      <div class="row between"><span class="stars" title="${esc(PRIO[p])}" aria-label="ほしさ：${esc(PRIO[p])}">${stars(p)} <small>${esc(PRIO[p])}</small></span>${when}</div>
+      ${saved || w.when ? `<div><span class="meter big"><span style="width:${price ? Math.min(100, Math.round((saved / price) * 100)) : 0}%"></span></span>
+        <small class="hint">貯めた ${yen(saved)}${price ? (rest ? `・あと ${yen(rest)}` : '・<b style="color:var(--signal)">貯まった ✦</b>') : ''}${pace}</small></div>` : ''}
+      ${afford}
+      ${w.memo ? `<p class="memo">${esc(w.memo)}</p>` : ''}
+      ${url ? `<p class="hint"><a class="wish-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">🔗 お店のページ</a></p>` : ''}
+      <div class="row end"><button class="btn small" data-act="kb-wish-edit" data-id="${esc(w.id)}">直す</button>
+        <button class="btn small" data-act="kb-wish-save" data-id="${esc(w.id)}">💰 貯めた</button>
+        <button class="btn small primary" data-act="kb-wish-buy" data-id="${esc(w.id)}">🛒 買った</button></div></article>`;
+  }
+  function viewWish() {
+    const list = settings().wishes, want = list.filter((w) => (w.status || 'want') === 'want');
+    want.sort((a, b) => prioOf(b) - prioOf(a) || (a.when || '9').localeCompare(b.when || '9') || (a.createdAt || 0) - (b.createdAt || 0));
+    const bought = list.filter((w) => w.status === 'bought').sort((a, b) => (b.doneDate || '').localeCompare(a.doneDate || ''));
+    const gave = list.filter((w) => w.status === 'gaveup').sort((a, b) => (b.doneDate || '').localeCompare(a.doneDate || ''));
+    const total = want.reduce((a, w) => a + (w.price || 0), 0), saved = want.reduce((a, w) => a + Math.min(w.saved || 0, w.price || 0), 0);
+    const f = forecast();
+    const doneList = (arr, kind) => `<ul class="lines">${arr.map((w) => `<li><div class="who">${esc(w.icon || '🎁')} ${esc(w.name)}<small>${w.doneDate ? esc(md(w.doneDate)) + '・' : ''}${kind === 'bought' ? `${yen(w.paid || w.price || 0)} で買った` : 'あきらめた'}</small>
+        <button class="btn link" data-act="kb-wish-status" data-id="${esc(w.id)}" data-v="want">ほしい物にもどす</button></div>
+      <div class="amt ${kind === 'bought' ? 'out' : ''}">${yen(kind === 'bought' ? w.paid || w.price || 0 : w.price || 0)}</div></li>`).join('')}</ul>`;
+    return `<section class="sec">
+      <h2 class="sec-title"><span class="mark">🎁</span> ほしい物リスト<span class="grow"></span><button class="btn primary small" data-act="kb-wish-edit" data-id="">＋ 足す</button></h2>
+      ${want.length ? `<div class="kb-sum">
+        <div class="bal"><span class="label">ほしい物</span><span class="num">${want.length}件</span></div>
+        <div class="bal out"><span class="label">ぜんぶで</span><span class="num">${yen(total)}</span></div>
+        <div class="bal in"><span class="label">貯めた</span><span class="num">${yen(saved)}</span></div></div>
+        <p class="hint">「買っても足りそうか」は、いまの口座の合計 ${f.start < 0 ? '−' : ''}${yen(Math.abs(f.start))} から、これから${HORIZON}日の収入・支払い・予定の予算をたどって出しています（返ってくる予定のお金は数えません）。</p>
+        <div class="entries">${want.map((w) => wishCard(w, f)).join('')}</div>`
+      : '<p class="empty">ほしい物はまだありません。<br>「＋ 足す」から書きましょう。値段を入れると、いつなら買っても大丈夫かが出ます。</p>'}
+    </section>
+    ${bought.length || gave.length ? `<section class="sec"><div class="row">
+      ${bought.length ? `<button class="btn small" data-act="kb-wish-done" data-v="bought" aria-pressed="${KB.wishDone === 'bought'}">✓ 買った物（${bought.length}件）</button>` : ''}
+      ${gave.length ? `<button class="btn small" data-act="kb-wish-done" data-v="gaveup" aria-pressed="${KB.wishDone === 'gaveup'}">あきらめた物（${gave.length}件）</button>` : ''}</div>
+      ${gave.length ? `<p class="hint">あきらめて浮いたお金：<b style="color:var(--brass-bright)">${yen(gave.reduce((a, w) => a + (w.price || 0), 0))}</b> ✦</p>` : ''}
+      ${KB.wishDone === 'bought' && bought.length ? doneList(bought, 'bought') : ''}${KB.wishDone === 'gaveup' && gave.length ? doneList(gave, 'gaveup') : ''}</section>` : ''}`;
+  }
+  function openWish(id) {
+    const w = settings().wishes.find((x) => x.id === id);
+    ctx.openSheet('kb-wish', w ? { id: w.id, name: w.name, icon: w.icon || '🎁', price: w.price ? String(w.price) : '', prio: prioOf(w), when: w.when || '', cat: w.cat || '', url: w.url || '', memo: w.memo || '', status: w.status || 'want', del: false }
+      : { id: null, name: '', icon: '🎁', price: '', prio: 2, when: '', cat: '', url: '', memo: '', status: 'want', del: false });
+  }
+  function wishBody() {
+    const X = ctx.U().sheet, s = settings();
+    const seg = (v) => `<button type="button" data-act="kb-wish-prio" data-v="${v}" aria-pressed="${+X.prio === v}">${stars(v)}<br><small>${PRIO[v]}</small></button>`;
+    return `<div class="two">
+        <div class="field"><label for="kw-name">ほしい物</label><input id="kw-name" maxlength="40" data-bind="sheet.name" value="${esc(X.name)}" placeholder="例：ワイヤレスイヤホン"></div>
+        <div class="field"><label for="kw-icon">しるし（絵文字1つ）</label><input id="kw-icon" maxlength="4" data-bind="sheet.icon" value="${esc(X.icon)}"></div></div>
+      <div class="two">
+        <div class="field"><label for="kw-price">値段（だいたいでOK・足し算もOK）</label><div class="yen"><span>¥</span><input id="kw-price" inputmode="text" data-bind="sheet.price" value="${esc(X.price)}" placeholder="例：12800+送料500"></div><span class="hint" id="kb-calc"></span></div>
+        <div class="field"><label for="kw-when">買う予定の日（なくてもOK）</label><input id="kw-when" type="date" data-bind="sheet.when" value="${esc(X.when)}"></div></div>
+      <p class="hint">買う予定の日を入れると、これからのお金の見通し（足りなくなりそうなら警告）と、航海日誌のカレンダーにも入ります。</p>
+      <fieldset><legend>どれくらいほしい？</legend><div><div class="seg">${seg(1)}${seg(2)}${seg(3)}</div></div></fieldset>
+      <fieldset><legend>買ったときの分類（なくてもOK）</legend><div class="filters">${s.expenseCats.map((c) => `<button type="button" class="pillbtn" data-act="kb-wish-cat" data-v="${esc(c.id)}" aria-pressed="${X.cat === c.id}">${esc(c.icon)} ${esc(c.name)}</button>`).join('')}</div></fieldset>
+      <div class="field"><label for="kw-url">お店のページ（なくてもOK）</label><input id="kw-url" type="url" inputmode="url" maxlength="500" data-bind="sheet.url" value="${esc(X.url)}" placeholder="https://…"></div>
+      <div class="field"><label for="kw-memo">メモ（なくてもOK）</label><input id="kw-memo" maxlength="200" data-bind="sheet.memo" value="${esc(X.memo)}" placeholder="例：セールを待つ・色は黒"></div>
+      ${X.id && X.status === 'want' ? `<div class="row"><button type="button" class="btn small" data-act="kb-wish-status" data-id="${esc(X.id)}" data-v="gaveup">あきらめる</button></div>` : ''}
+      ${X.id && X.status !== 'want' ? `<div class="row"><button type="button" class="btn small" data-act="kb-wish-status" data-id="${esc(X.id)}" data-v="want">ほしい物にもどす</button></div>` : ''}
+      ${X.id ? delRow(X, 'このほしい物を消しますか？') : ''}${ctx.foot('保存する')}`;
+  }
+  function submitWish() {
+    const X = ctx.U().sheet, s = settings();
+    const name = X.name.trim();
+    if (!name) return ctx.sheetErr('ほしい物の名前を入れてください');
+    if (X.when && !/^\d{4}-\d{2}-\d{2}$/.test(X.when)) return ctx.sheetErr('買う予定の日を入れ直してください');
+    const url = String(X.url || '').trim();
+    if (url && !safeUrl(url)) return ctx.sheetErr('お店のページは https:// ではじまるアドレスを入れてください');
+    const prev = s.wishes.find((w) => w.id === X.id) || {};
+    const w = { ...prev, id: X.id || 'w' + rid(), name, icon: X.icon.trim() || '🎁', price: calc(X.price), prio: Math.min(3, Math.max(1, +X.prio || 2)), when: X.when || '', cat: X.cat || '', url, memo: X.memo.trim(),
+      saved: prev.saved || 0, status: prev.status || 'want', createdAt: prev.createdAt || Date.now() };
+    saveSettings({ ...s, wishes: X.id ? s.wishes.map((x) => (x.id === X.id ? w : x)) : [...s.wishes, w] }, X.id ? '✓ 直しました' : `✓ 「${name}」をほしい物に入れました`);
+    ctx.closeSheet();
+  }
+  function wsaveBody() {
+    const X = ctx.U().sheet, w = settings().wishes.find((x) => x.id === X.id);
+    if (!w) return '<p class="hint">そのほしい物はもうありません。</p>';
+    return `<p class="hint">${esc(w.icon || '🎁')} ${esc(w.name)}${w.price ? `（${yen(w.price)}）` : ''}のために、いま貯まっている額を入れてください。</p>
+      <div class="field"><label for="kw-saved">貯まっている額（3000+1000 のような足し算もOK）</label><div class="yen"><span>¥</span><input id="kw-saved" inputmode="text" data-bind="sheet.saved" value="${esc(X.saved)}" placeholder="0"></div><span class="hint" id="kb-calc"></span></div>
+      <p class="hint">めやすを残すだけで、口座のお金は動きません。貯金用の口座に移したときは、👛 口座の「🔁 振替」で入れてください。</p>
+      ${ctx.foot('保存する')}`;
   }
 
   // ---------- 書き出し ----------

@@ -305,8 +305,7 @@ fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width:
 .due-input { max-width: 11em; }
 .choice button .num { color: var(--brass-bright); }
 
-/* 家計簿のタブ（6つ：3つずつ2段）・移す先・予定 */
-.kb-tabs { grid-template-columns: repeat(3, 1fr); }
+/* 移す先・予定 */
 .mv-row { display: grid; gap: 6px; padding: 8px; border: 1px dashed var(--chart-line); border-radius: 8px; }
 .kb-list .amt.lend { color: var(--brass-bright); }
 .entry.ev .meter.big { margin: 0; }
@@ -332,3 +331,17 @@ fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width:
 .crep .num { font-weight: 600; }
 img.receipt { display: block; max-width: 100%; max-height: 220px; border-radius: 8px; border: 1px solid var(--chart-line); margin-bottom: 6px; background: #fff; }
 img.receipt.big { max-height: none; width: 100%; }
+
+/* 🎁 ほしい物リスト（家計簿のタブは7つ：4つと3つの2段） */
+.kb-tabs { grid-template-columns: repeat(4, 1fr); }
+.entry.wish .meter.big { margin: 0 0 2px; }
+.entry.wish.p3 { border-color: color-mix(in srgb, var(--brass) 55%, var(--chart-line)); }
+.wish-price { font-weight: 600; color: var(--brass-bright); }
+.stars { color: var(--brass-bright); letter-spacing: 1px; }
+.stars small { color: var(--parchment-dim); letter-spacing: 0; font-size: .72rem; }
+.afford { font-size: .8rem; margin: 0; }
+.afford small { display: block; color: var(--parchment-dim); font-size: .74rem; }
+.afford.ok { color: var(--signal); }
+.afford.wait { color: var(--brass-bright); }
+.afford.ng { color: var(--danger-text); }
+.wish-link { color: var(--brass-bright); }
