@@ -67,7 +67,9 @@
     return {
       id, kind: ['income', 'transfer', 'adjust'].includes(v.kind) ? v.kind : 'expense', dir: v.dir === 'minus' ? 'minus' : 'plus', date: str(v.date, 10), amount: num(v.amount),
       cat: str(v.cat, 40), account: str(v.account, 40), toAccount: str(v.toAccount, 40), title: str(v.title, 60), memo: str(v.memo, 300),
-      rec: str(v.rec, 40), base: num(v.base), shifted: num(v.shifted), shift: str(v.shift, 40), createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
+      rec: str(v.rec, 40), base: num(v.base), shifted: num(v.shifted), shift: str(v.shift, 40),
+      from: str(v.from, 60), event: str(v.event, 40), // from：どの収入から移したか（振替）。event：どの予定で使ったか
+      createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
     };
   }
   // 前借り（定期収入）・後払い（定期の支払い）：kashikari_private/{uid}/shifts/{id}

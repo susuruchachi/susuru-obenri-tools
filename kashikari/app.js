@@ -873,6 +873,7 @@
     if (!o) return;
     if (key === 'amount' && root === 'sheet' && U.sheet.sheetKind === 'loan') U.sheet.amounts[t.dataset.key] = t.value;
     else if (key === 'cat' && root === 'sheet' && U.sheet.sheetKind === 'kb-budget') U.sheet.cats[t.dataset.key] = t.value;
+    else if (key === 'mv' && root === 'sheet' && U.sheet.moves) U.sheet.moves[+t.dataset.key].amount = t.value;
     else o[key] = t.type === 'checkbox' ? t.checked : t.value;
     if (root === 'sheet') { updatePreview(); KB.afterDraw(); }
     if (root === 'kb') render();

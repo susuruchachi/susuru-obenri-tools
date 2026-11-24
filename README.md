@@ -49,6 +49,16 @@
   - 月ごとの収入・支出・収支、予算（ぜんぶ・分類ごと）とあといくら、「今日から1日いくらまで」
   - 何に使った？（分類ごとの棒。押すとその分類だけ出す）、日ごとの一覧
   - さがす：内容・メモ・分類・金額で、ぜんぶの月からさがす
+- **🤝 貸し借りも家計簿に入る**（みんなの帳簿・自分だけの貸し借り。記録を2重に書かず、貸し借りの記録から毎回つくる。収入・支出には数えず、口座の残高と通帳に効く）
+  - 貸した・返した → 口座から出ていく。借りた・返ってきた → 口座に入る
+  - 割り勘で自分の分も払ったとき → 自分の分は支出（分類は設定で決める）
+  - 借りた側で、割り勘・立て替え（払った先あり）のもの → 現金が入ったのではなく「立て替えてもらった」支出。肩代わりしてもらった分は、お金が動いていないので入れない
+  - 🤝 の記録を押すと、口座・分類・「現金で借りた／立て替えてもらった／入れない」を1件ずつ直せる。設定で、入れる・入れない、いつもの口座、入れはじめる日
+- **収入から移す**：収入を入れるときに「そのうち、ほかの口座に移した？」（PayPay など・何か所でも）→ 収入と振替をいっしょに入れる。収入を消すと、移した記録も消える
+  - 定期の収入（給料・お小遣い）にも「入ったら毎回、ほかの口座に移す？」。自動で入るときに振替も入る（収入より多くは移さない）
+- **🎟 予定**：遊びに行く・旅行など一度きりの予定に予算（「4000+2000」のような足し算もOK）。家計簿に支出を入れるときに予定をえらぶと、予定の「使った・あといくら」に入る
+  - 予定の「＋ 使ったのを入れる」から入れると、はじめから予定がえらばれている
+  - その月の家計簿に「🎟 ○月の予定」。月の予算に「予定の分を残しておくと、使えるのはあと ¥…」
 - **👛 口座**：財布・銀行・電子マネーなど（足せる）。口座ごとの残高と合計、貸し借りを合わせた「ぜんぶ合わせると」
   - **通帳**：口座を押すと、お引出し・お預入れ・残高の通帳の形で出る。「⚖️ 残高を合わせる」でほんとうの残高に直せる（収入・支出には数えない）
 - **🤝 貸し借り**：アプリを使っていない人との貸し借り（貸した・借りた・返済・完済・返す期限）
@@ -101,10 +111,11 @@ kashikari_books/{帳簿ID}/loans/{id}      { lender, title, date, memo, mode, to
                                          （via は肩代わり：{ claimId, loanId, lender: 返した先, for: 代わりに返してあげた人, title }。by は実際に払った人）
 kashikari_books/{帳簿ID}/claims/{id}     { loanId, lender, from, for, coverLoanId, amount, date, note, status: pending|approved|rejected }（for があれば肩代わり）
 kashikari_private/{uid}/entries/{id}     自分だけの貸し借り { dir: lent|borrowed, who, title, date, amount, due, repayments }
-kashikari_private/{uid}/tx/{id}          家計簿 { kind: expense|income|transfer|adjust, date, amount, cat, account, toAccount, dir, title, memo, rec }
+kashikari_private/{uid}/tx/{id}          家計簿 { kind: expense|income|transfer|adjust, date, amount, cat, account, toAccount, dir, title, memo, rec, from: 移したもとの収入, event: 予定 }
                                          （固定費で入ったものは id が rec_{固定費ID}_{何の分}。消した分は設定の skip に覚えて入れ直さない）
 kashikari_private/{uid}/kakeibo/settings 家計簿の設定 { expenseCats, incomeCats, accounts: [{ id, name, icon, initial }], budget: { total, cats },
-                                         recurring: [{ id, kind, title, amount, freq: month|year|week, day, month, wday, cat, account, active, start, startDate, skip }] }
+                                         lend: { on, account, since, cat, links: { 記録のキー: { account, off, as, cat } } }, events: [{ id, name, icon, date, end, budget, memo }],
+                                         recurring: [{ id, kind, title, amount, freq: month|year|week, day, month, wday, cat, account, active, start, startDate, skip, moves: [{ account, amount }] }] }
 kashikari_private/{uid}/shifts/{id}      前借り・後払い { kind: advance|defer, rec, period（毎月 YYYY-MM・毎年 YYYY・毎週 YYYY-MM-DD）, amount, date, account, memo, txId, paid, paidDate }
                                          （固定費で入った記録には base（もとの額）と shifted（差し引いた額）、前借り・後払いで入った記録には shift）
 ```
