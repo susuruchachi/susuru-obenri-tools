@@ -296,3 +296,65 @@ fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width:
 .upd-state.new { border-color: var(--brass); color: var(--brass-bright); }
 .upd-state.bad { border-color: var(--danger); color: var(--danger-text); }
 .notes { margin: 0; padding-left: 1.2em; font-size: .8rem; color: var(--parchment-dim); line-height: 1.8; }
+
+/* 返す期限・肩代わり・立て替え */
+.tag.soft { color: var(--parchment-dim); border-color: var(--chart-line); }
+.lines .who .tag, .share-main .tag + .tag { margin-top: 3px; display: inline-block; }
+.share-main > div > .tag { display: inline-block; margin-top: 4px; }
+.via { font-size: .8rem; color: var(--parchment-dim); background: var(--ink-panel-2); border-radius: 8px; padding: 7px 10px; display: grid; gap: 4px; justify-items: start; }
+.due-input { max-width: 11em; }
+.choice button .num { color: var(--brass-bright); }
+
+/* 移す先・予定 */
+.mv-row { display: grid; gap: 6px; padding: 8px; border: 1px dashed var(--chart-line); border-radius: 8px; }
+.kb-list .amt.lend { color: var(--brass-bright); }
+.entry.ev .meter.big { margin: 0; }
+
+/* 見通しの警告 */
+.notice.warnbox { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--ink-panel)); }
+.notice.warnbox h3 { color: var(--danger-text); }
+.lines li.neg .who { color: var(--danger-text); }
+
+/* 💳 家族のカード */
+.subtabs button { padding: 6px 11px; }
+.ctable { overflow-x: auto; border: 1px solid var(--chart-line); border-radius: 10px; }
+.ctable table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.ctable th { text-align: left; font-weight: 600; color: var(--parchment-dim); font-size: .72rem; padding: 6px 8px; border-bottom: 1px solid var(--chart-line); }
+.ctable td { padding: 7px 8px; border-bottom: 1px dashed var(--chart-line); }
+.ctable tr:last-child td { border-bottom: 0; }
+.ctable .r { text-align: right; }
+.creps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.crep { background: var(--ink-deep); border: 1px solid var(--chart-line); border-radius: 10px; padding: 9px 11px; display: grid; gap: 6px; }
+.crep-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.crep-main b { overflow-wrap: anywhere; }
+.crep-main small { display: block; color: var(--parchment-dim); font-size: .74rem; }
+.crep .num { font-weight: 600; }
+img.receipt { display: block; max-width: 100%; max-height: 220px; border-radius: 8px; border: 1px solid var(--chart-line); margin-bottom: 6px; background: #fff; }
+img.receipt.big { max-height: none; width: 100%; }
+
+/* 🎁 ほしい物リスト（家計簿のタブは7つ：4つと3つの2段） */
+.kb-tabs { grid-template-columns: repeat(4, 1fr); }
+.entry.wish .meter.big { margin: 0 0 2px; }
+.entry.wish.p3 { border-color: color-mix(in srgb, var(--brass) 55%, var(--chart-line)); }
+.wish-price { font-weight: 600; color: var(--brass-bright); }
+.stars { color: var(--brass-bright); letter-spacing: 1px; }
+.stars small { color: var(--parchment-dim); letter-spacing: 0; font-size: .72rem; }
+.afford { font-size: .8rem; margin: 0; }
+.afford small { display: block; color: var(--parchment-dim); font-size: .74rem; }
+.afford.ok { color: var(--signal); }
+.afford.wait { color: var(--brass-bright); }
+.afford.ng { color: var(--danger-text); }
+.wish-link { color: var(--brass-bright); }
+
+/* 固定費の「パス」「いつまで」 */
+.pillbtn.occ.skipped { text-decoration: line-through; text-decoration-color: var(--danger-text); color: var(--parchment-dim); border-style: dashed; }
+.pillbtn.occ.skipped[aria-pressed="true"] { background: transparent; border-color: var(--danger); }
+.lines li.rec-ended .who, .lines li.rec-ended .amt { opacity: .6; }
+.kr-range summary { cursor: pointer; font-size: .8rem; color: var(--parchment-dim); margin-top: 6px; }
+.kr-range .row { margin-top: 6px; flex-wrap: wrap; }
+
+/* 🔁 付け替え */
+.ho-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ho-list li { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--chart-line); border-radius: 10px; }
+.ho-list .check small { display: block; color: var(--parchment-dim); font-size: .74rem; margin-left: 1.6em; }
+.pillbtn:disabled { opacity: .4; }

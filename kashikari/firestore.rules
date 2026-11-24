@@ -8,6 +8,7 @@ service cloud.firestore {
       function kkMember() { return kkSignedIn() && request.auth.uid in kkBook().members; }
       function kkOpen() { return kkBook().get('closing', false) != true; }
       function kkClosingOwner() { return kkSignedIn() && kkBook().owner == request.auth.uid && kkBook().get('closing', false) == true; }
+      function kkCardHolder(cardId) { return get(/databases/$(database)/documents/kashikari_books/$(bookId)/cards/$(cardId)).data.holder == request.auth.uid; }
       function kkOnlyMyName() {
         return request.resource.data.names.diff(resource.data.names).affectedKeys().hasOnly([request.auth.uid])
           && request.resource.data.names[request.auth.uid] is string
@@ -68,6 +69,79 @@ service cloud.firestore {
           && request.resource.data.status in ['approved', 'rejected'];
         allow delete: if (kkMember() && (resource.data.from == request.auth.uid || resource.data.lender == request.auth.uid)) || kkClosingOwner();
       }
+
+      // Handoff: debtor (from) or lender asks another member (to) to repay instead.
+      // to accepts (toOk), lender agrees (lenderOk); then the lender moves the debt (status done).
+      match /handoffs/{handoffId} {
+        allow read: if kkMember();
+        allow create: if kkMember() && kkOpen()
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.status == 'pending'
+          && request.resource.data.from is string && request.resource.data.to is string
+          && request.resource.data.from != request.resource.data.to
+          && request.resource.data.to != request.resource.data.lender
+          && request.resource.data.from != request.resource.data.lender
+          && request.resource.data.to in kkBook().members
+          && (request.auth.uid == request.resource.data.from || request.auth.uid == request.resource.data.lender)
+          && request.resource.data.lenderOk == (request.auth.uid == request.resource.data.lender)
+          && request.resource.data.toOk == false
+          && get(/databases/$(database)/documents/kashikari_books/$(bookId)/loans/$(request.resource.data.loanId)).data.lender == request.resource.data.lender;
+        allow update: if kkMember() && kkOpen() && resource.data.status == 'pending' && (
+          (request.auth.uid == resource.data.to
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['toOk', 'status', 'decidedAt'])
+            && ((request.resource.data.status == 'pending' && request.resource.data.toOk == true) || request.resource.data.status == 'declined'))
+          || (request.auth.uid == resource.data.lender
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lenderOk', 'status', 'decidedAt', 'newLoanId'])
+            && ((request.resource.data.status == 'pending' && request.resource.data.lenderOk == true)
+              || request.resource.data.status == 'rejected'
+              || (request.resource.data.status == 'done' && resource.data.toOk == true && request.resource.data.lenderOk == true)))
+        );
+        allow delete: if (kkMember() && (resource.data.by == request.auth.uid || resource.data.from == request.auth.uid) && resource.data.status != 'done')
+          || (kkMember() && resource.data.lender == request.auth.uid && resource.data.status != 'pending')
+          || kkClosingOwner();
+      }
+
+      match /cards/{cardId} {
+        allow read: if kkMember();
+        allow create: if kkMember() && kkOpen() && request.resource.data.holder == request.auth.uid;
+        allow update: if kkMember() && kkOpen() && resource.data.holder == request.auth.uid && request.resource.data.holder == request.auth.uid;
+        allow delete: if (kkMember() && resource.data.holder == request.auth.uid) || kkClosingOwner();
+      }
+
+      match /cardReports/{reportId} {
+        allow read: if kkMember();
+        allow create: if kkMember() && kkOpen()
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.get('checked', false) != true;
+        allow update: if kkMember() && kkOpen() && (
+          (resource.data.by == request.auth.uid && request.resource.data.by == request.auth.uid
+            && request.resource.data.get('checked', false) == resource.data.get('checked', false))
+          || (kkCardHolder(resource.data.card)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['checked', 'checkedAt'])));
+        allow delete: if (kkMember() && (resource.data.by == request.auth.uid || kkCardHolder(resource.data.card))) || kkClosingOwner();
+      }
+
+      match /cardPhotos/{reportId} {
+        allow read: if kkMember();
+        allow create: if kkMember() && kkOpen() && request.resource.data.by == request.auth.uid;
+        allow update: if kkMember() && kkOpen() && resource.data.by == request.auth.uid && request.resource.data.by == request.auth.uid;
+        allow delete: if (kkMember() && (resource.data.by == request.auth.uid || kkCardHolder(resource.data.card))) || kkClosingOwner();
+      }
+
+      match /cardCharges/{chargeId} {
+        allow read: if kkMember();
+        allow create, update: if kkMember() && kkOpen() && kkCardHolder(request.resource.data.card);
+        allow delete: if (kkMember() && kkCardHolder(resource.data.card)) || kkClosingOwner();
+      }
+    }
+
+    match /kashikari_links/{code} {
+      allow get: if code.size() >= 20;
+      allow create: if request.auth != null && code.size() >= 20 && request.resource.data.owner == request.auth.uid;
+      allow update: if (request.auth != null && resource.data.owner == request.auth.uid && request.resource.data.owner == request.auth.uid)
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['koukai', 'koukaiAt'])
+          && request.resource.data.koukai is list && request.resource.data.koukai.size() <= 300);
+      allow delete: if request.auth != null && resource.data.owner == request.auth.uid;
     }
 
     match /kashikari_private/{uid}/{document=**} {
