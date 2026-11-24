@@ -345,3 +345,10 @@ img.receipt.big { max-height: none; width: 100%; }
 .afford.wait { color: var(--brass-bright); }
 .afford.ng { color: var(--danger-text); }
 .wish-link { color: var(--brass-bright); }
+
+/* 固定費の「パス」「いつまで」 */
+.pillbtn.occ.skipped { text-decoration: line-through; text-decoration-color: var(--danger-text); color: var(--parchment-dim); border-style: dashed; }
+.pillbtn.occ.skipped[aria-pressed="true"] { background: transparent; border-color: var(--danger); }
+.lines li.rec-ended .who, .lines li.rec-ended .amt { opacity: .6; }
+.kr-range summary { cursor: pointer; font-size: .8rem; color: var(--parchment-dim); margin-top: 6px; }
+.kr-range .row { margin-top: 6px; flex-wrap: wrap; }
