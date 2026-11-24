@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
 
         web = new WebView(this);
         web.setBackgroundColor(Color.parseColor(INK));
-        setContentView(web);
+        setContentView(LauncherBar.wrap(this, web, Color.parseColor(INK))); // ★【1.5.0】 上のバー（すするアプリ・ほかのアプリ）
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -185,6 +185,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        LauncherBar.refresh(this);
         LauncherInstaller.maybeOffer(this); // ★【1.4.0】 すするアプリ（ランチャー）がまだなら、入れるか聞く
         if (InstallResultReceiver.askLater) { InstallResultReceiver.askLater = false; bg.execute(() -> ApkUpdater.install(getApplicationContext())); }
     }
