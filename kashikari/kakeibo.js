@@ -56,6 +56,8 @@ const Kakeibo = (ctx) => {
       },
       // 一度きりの予定：[{ id, name, icon, date, end, budget, memo }]
       events: Array.isArray(k.events) ? k.events : [],
+      // 航海日誌との連携コード（kashikari_links/{code}）
+      link: typeof k.link === 'string' ? k.link : '',
     };
   }
   const saveSettings = (next, msg) => run(KStore.saveKb(next), msg);
@@ -197,7 +199,7 @@ const Kakeibo = (ctx) => {
     if (KB.sub === 'year') return h + viewYear();
     if (KB.sub === 'events') return h + viewEvents();
     if (KB.sub === 'settings') return h + viewSettings();
-    return h + viewMonth();
+    return h + (KB.month === curYM() ? warnBlock() : '') + viewMonth();
   }
 
   function viewMonth() {
@@ -302,7 +304,7 @@ const Kakeibo = (ctx) => {
       <h2 class="sec-title"><span class="mark">🎟</span> 予定と予算<span class="grow"></span><button class="btn primary small" data-act="kb-ev-edit" data-id="">＋ 予定を足す</button></h2>
       <p class="hint">遊びに行く・旅行・誕生日など、一度きりの予定に予算を決めておけます。家計簿に入れるときに予定をえらぶと、あといくら使えるかが出ます。</p>
       ${up.length ? `<div class="entries">${up.map((e) => eventCard(e, KB.evOpen === e.id)).join('')}</div>` : '<p class="empty">これからの予定はありません。<br>「＋ 予定を足す」から書きましょう。</p>'}
-    </section>
+    </section>${koukaiBlock()}${forecastBlock()}
     ${past.length ? `<section class="sec"><h3 class="sec-title"><span class="mark">✦</span> おわった予定</h3><div class="entries">${past.slice(0, KB.evAll ? 999 : 5).map((e) => eventCard(e, KB.evOpen === e.id)).join('')}</div>
       ${past.length > 5 && !KB.evAll ? `<button class="btn link" data-act="kb-ev-all">ぜんぶ見る（${past.length}件）</button>` : ''}</section>` : ''}`;
   }
@@ -462,6 +464,7 @@ const Kakeibo = (ctx) => {
         <button class="btn small" data-act="kb-shift-new" data-id="${esc(r.id)}">${r.kind === 'income' ? '💴 前借り' : '🕒 後払い'}</button></div>
         <div class="amt ${r.kind === 'income' ? 'in' : 'out'}">${r.kind === 'income' ? '+' : '−'}${yen(r.amount)}</div></li>`; }).join('')}</ul>` : ''}
     </section>
+    ${linkBlock()}
     <section class="sec">
       <h2 class="sec-title"><span class="mark">🤝</span> 貸し借りを家計簿に入れる<span class="grow"></span><button class="btn small" data-act="kb-lendset">直す</button></h2>
       <p class="hint">${s.lend.on ? `入れる・いつもの口座は ${esc(acctOf(s.lend.account).icon)} ${esc(acctOf(s.lend.account).name)}${s.lend.since ? `・${esc(md(s.lend.since))}から` : ''}` : '入れない'}。1件ずつの口座や「入れない」は、家計簿の 🤝 の記録を押して直せます。</p>
@@ -724,6 +727,12 @@ const Kakeibo = (ctx) => {
       case 'kb-rwday': if (X) { X.wday = d.v; ctx.drawSheet(); } return 'done';
       case 'kb-shift-new': openShift(d.id, null); return 'done';
       case 'kb-vas': if (X) { X.as = d.v; ctx.drawSheet(); } return 'done';
+      case 'kb-fc-all': KB.fcAll = true; return 'render';
+      case 'kb-copy': { const v = d.v; (async () => { try { await navigator.clipboard.writeText(v); toast('✓ コピーしました'); } catch (e) { toast('コピーできませんでした。長押しで選んでコピーしてください', true); } })(); return 'done'; }
+      case 'kb-link-new': (async () => { try { const code = await KStore.linkCreate(); await KStore.saveKb({ ...settings(), link: code }); toast('✓ 連携コードをつくりました'); } catch (e) { toast('つくれませんでした（' + (e.code || e.message) + '）', true); } })(); return 'done';
+      case 'kb-link-del': KB.linkDel = true; return 'render';
+      case 'kb-link-del-no': KB.linkDel = false; return 'render';
+      case 'kb-link-del-yes': { const code = s.link; KB.linkDel = false; KStore.linkDelete(code); saveSettings({ ...s, link: '' }, '連携をやめました'); return 'render'; }
       case 'kb-pick-event': if (X) { X.event = X.event === d.v ? '' : d.v; ctx.drawSheet(); } return 'done';
       case 'kb-ev-open': KB.evOpen = KB.evOpen === d.id ? '' : d.id; return 'render';
       case 'kb-ev-all': KB.evAll = true; return 'render';
@@ -975,6 +984,140 @@ const Kakeibo = (ctx) => {
     });
   }
 
+  // ---------- これからのお金の見通し（足りなくなりそうなら警告）----------
+  // 今の口座の合計から、これから入るお金（定期の収入・航海日誌の「入るお金」）と出ていくお金（定期の支払い・後払い・返す期限・予定の予算）を
+  // 日付の順にたどる。返ってくる予定のお金は、返ってこないこともあるので数えない（足りなくなるのを早めに知らせるため）
+  const HORIZON = 60;
+  const koukaiEvents = () => { const L = ctx.S().link; return L && Array.isArray(L.koukai) ? L.koukai.filter((e) => e && /^\d{4}-\d{2}-\d{2}$/.test(e.date || '')) : []; };
+  function forecastItems(days) {
+    const s = settings(), S = ctx.S(), now = today(), to = addDays(now, days || HORIZON), out = [];
+    const have = new Set(txs().map((t) => t.id));
+    s.recurring.forEach((r) => {
+      if (r.active === false || !r.amount) return;
+      occurrences(r, now, to, 400).forEach(({ period, date }) => {
+        if (have.has(recTxId(r, period)) || (r.skip || []).includes(period)) return;
+        const a = Math.max(0, r.amount - shiftSum(r.id, period));
+        if (a) out.push({ date, amount: r.kind === 'income' ? a : -a, title: `${recName(r)}（${periodLabel(period)}）`, src: r.kind === 'income' ? '定期の収入' : '固定費' });
+      });
+    });
+    unpaidDefers().forEach((x) => {
+      const r = s.recurring.find((y) => y.id === x.rec), d = x.date && x.date > now ? x.date : now;
+      if (d <= to) out.push({ date: d, amount: -x.amount, title: `${recName(r)}（${periodLabel(x.period)}）`, src: '後払い' });
+    });
+    if (S.user) KL.dueItems(S.books, S.loans, S.personal, S.user.uid).forEach((x) => {
+      if (x.d !== 'out') return;
+      const d = x.due > now ? x.due : now;
+      if (d <= to) out.push({ date: d, amount: -x.amt, title: `${x.who} に返す`, src: '返す期限' });
+    });
+    events().forEach((e) => {
+      if (evEnd(e) < now) return;
+      const left = Math.max(0, (e.budget || 0) - evSpent(e)), d = e.date > now ? e.date : now;
+      if (left && d <= to) out.push({ date: d, amount: -left, title: e.name, src: '🎟 予定' });
+    });
+    koukaiEvents().forEach((e) => {
+      if ((e.end || e.date) < now) return;
+      const d = e.date > now ? e.date : now;
+      if (d > to) return;
+      if (e.budget) out.push({ date: d, amount: -e.budget, title: e.title || '（名前なし）', src: '⚓ 航海日誌' });
+      if (e.income) out.push({ date: d, amount: +e.income, title: e.title || '（名前なし）', src: '⚓ 航海日誌（入るお金）' });
+    });
+    // 同じ日は、出ていく方を先に（足りなくなるのを見のがさない）
+    return out.sort((a, b) => a.date.localeCompare(b.date) || a.amount - b.amount);
+  }
+  function forecast(days) {
+    const s = settings();
+    let bal = s.accounts.reduce((a, x) => a + balance(x), 0);
+    const start = bal, items = forecastItems(days).map((x) => { bal += x.amount; return { ...x, bal }; });
+    const first = items.find((x) => x.bal < 0);
+    return { start, end: bal, items, warn: first ? { date: first.date, short: -first.bal, title: first.title } : null };
+  }
+  function warnBlock() {
+    const f = forecast();
+    if (!f.warn) return '';
+    return `<section class="sec"><div class="notice warnbox"><h3>⚠️ ${esc(md(f.warn.date))}ごろ、お金が足りなくなりそうです</h3>
+      <p class="hint">「${esc(f.warn.title)}」のところで <b class="over-t">${yen(f.warn.short)}</b> たりなくなります（いまの口座の合計 ${yen(f.start)} から、これからの収入と支払い・予定の予算をたどったとき）。</p>
+      <div class="row end"><button class="btn small" data-act="kb-sub" data-v="events">見通しを見る</button></div></div></section>`;
+  }
+  function forecastBlock() {
+    const f = forecast();
+    const rows = f.items.slice(0, KB.fcAll ? 200 : 12);
+    return `<section class="sec"><h3 class="sec-title"><span class="mark">📈</span> これからのお金（${HORIZON}日）</h3>
+      ${f.warn ? `<div class="notice warnbox"><h3>⚠️ ${esc(md(f.warn.date))}ごろ、${yen(f.warn.short)} たりなくなりそう</h3><p class="hint">予定の予算を見直すか、入るお金・後払いを考えてみてください。</p></div>`
+        : `<p class="hint">✦ ${HORIZON}日のあいだ、お金は足りそうです（${HORIZON}日後のめやす ${f.end < 0 ? '−' : ''}${yen(Math.abs(f.end))}）。</p>`}
+      <ul class="lines"><li><div class="who">いまの口座の合計</div><div class="amt">${f.start < 0 ? '−' : ''}${yen(Math.abs(f.start))}</div></li>
+      ${rows.map((x) => `<li class="${x.bal < 0 ? 'neg' : ''}"><div class="who">${esc(md(x.date))} ${esc(x.title)}<small>${esc(x.src)}・${x.amount < 0 ? '−' : '+'}${yen(Math.abs(x.amount))}</small></div><div class="amt ${x.bal < 0 ? 'out' : ''}">${x.bal < 0 ? '−' : ''}${yen(Math.abs(x.bal))}</div></li>`).join('')}</ul>
+      ${f.items.length > 12 && !KB.fcAll ? `<button class="btn link" data-act="kb-fc-all">ぜんぶ見る（${f.items.length}件）</button>` : ''}
+      <p class="hint">返ってくる予定のお金は数えていません。航海日誌の予定に付けた予算・入るお金も入ります（連携しているとき）。</p></section>`;
+  }
+
+  // ---------- 航海日誌との連携 ----------
+  const KOUKAI_URL = 'https://susuruchachi.github.io/koukai-nisshi-calendar/';
+  // 航海日誌のカレンダーに出すもの（14日前〜120日先）：定期の収入・支払い、後払い、返す期限、🎟 予定
+  function linkFeed() {
+    const s = settings(), S = ctx.S(), now = today(), from = addDays(now, -14), to = addDays(now, 120), out = [];
+    s.recurring.forEach((r) => {
+      if (r.active === false || !r.amount) return;
+      occurrences(r, from, to, 400).forEach(({ period, date }) => {
+        const a = Math.max(0, r.amount - shiftSum(r.id, period));
+        out.push({ id: `r_${r.id}_${period}`, date, kind: r.kind, amount: a, title: `${r.kind === 'income' ? '💴' : '💸'} ${recName(r)} ${r.kind === 'income' ? '+' : '−'}${yen(a)}`,
+          note: `${freqLabel(r)}・${periodLabel(period)}${a !== r.amount ? `（前借り・後払い ${yen(r.amount - a)} を差し引き）` : ''}` });
+      });
+    });
+    unpaidDefers().forEach((x) => {
+      const r = s.recurring.find((y) => y.id === x.rec);
+      if (x.date) out.push({ id: `d_${x.id}`, date: x.date, kind: 'expense', amount: x.amount, title: `🕒 ${recName(r)} 後払い −${yen(x.amount)}`, note: `${periodLabel(x.period)}・まだ払っていない` });
+    });
+    if (S.user) KL.dueItems(S.books, S.loans, S.personal, S.user.uid).forEach((x, i) => {
+      if (x.due < from) return;
+      out.push({ id: `l_${x.due}_${i}`, date: x.due, kind: 'due', amount: x.amt, title: `⏰ ${x.d === 'in' ? `${x.who} から返ってくる` : `${x.who} に返す`} ${yen(x.amt)}`, note: `${x.title || ''}${x.book ? '・' + x.book : ''}（返す期限）` });
+    });
+    events().forEach((e) => {
+      if (evEnd(e) < from) return;
+      out.push({ id: `e_${e.id}`, date: e.date, end: e.end || '', kind: 'event', amount: e.budget || 0, title: `🎟 ${e.name}${e.budget ? `（予算 ${yen(e.budget)}）` : ''}`, note: `使った ${yen(evSpent(e))}${e.memo ? '・' + e.memo : ''}` });
+    });
+    return out.filter((x) => x.date >= from && x.date <= to).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 400);
+  }
+  let pubTimer = null, pubLast = '';
+  // データが変わったら：連携の文書を見て、航海日誌に出すものを送る（変わったときだけ）
+  function publishLink() {
+    const S = ctx.S(), code = settings().link;
+    if (!S.user || !S.kbReady) return;
+    KStore.linkWatch(code);
+    if (!code || !S.link || S.link.missing || !S.txReady || !S.shiftsReady || !S.booksReady) return;
+    clearTimeout(pubTimer);
+    pubTimer = setTimeout(() => {
+      const feed = linkFeed(), f = forecast(), warn = f.warn ? { ...f.warn, label: `⚠️ ${md(f.warn.date)}ごろ、お金が ${yen(f.warn.short)} たりなくなりそう（${f.warn.title}）` } : null;
+      const key = JSON.stringify({ code, feed, warn });
+      if (key === pubLast) return;
+      pubLast = key;
+      KStore.linkPublish(code, feed, warn).catch(() => { pubLast = ''; });
+    }, 1500);
+  }
+  function linkBlock() {
+    const s = settings(), L = ctx.S().link, code = s.link;
+    if (!code) return `<section class="sec"><h2 class="sec-title"><span class="mark">⚓</span> 航海日誌と連携</h2>
+      <p class="hint">定期の収入・支払い、返す期限、🎟 予定を、航海日誌のカレンダーに出します。航海日誌の予定に付けた「予算」「入るお金」は、こちらの見通し（足りなくなりそうかの警告）に入ります。</p>
+      <div class="row"><button class="btn small primary" data-act="kb-link-new">連携コードをつくる</button></div></section>`;
+    const url = `${KOUKAI_URL}?kashikari=${code}`, got = L && Array.isArray(L.koukai) ? L.koukai.length : 0;
+    return `<section class="sec"><h2 class="sec-title"><span class="mark">⚓</span> 航海日誌と連携</h2>
+      <p class="hint">航海日誌で、このリンクを開くか、「☁️」→「貸し借り帳と連携」に連携コードを入れてください（航海日誌のほかの端末にも届きます）。</p>
+      <div class="field"><label for="kl-code">連携コード</label><div class="codebox"><input id="kl-code" class="plain-input" readonly value="${esc(code)}"><button type="button" class="btn small" data-act="kb-copy" data-v="${esc(code)}">コピー</button></div></div>
+      <div class="field"><label for="kl-url">航海日誌で開くリンク</label><div class="codebox"><input id="kl-url" class="plain-input" readonly value="${esc(url)}"><button type="button" class="btn small" data-act="kb-copy" data-v="${esc(url)}">コピー</button></div></div>
+      <p class="hint">${L && L.missing ? '⚠️ 連携の文書が見つかりません（Firestore のルールが古いかも）。' : `航海日誌から届いた予定：${got}件${L && L.koukaiAt ? `（${esc(new Date(L.koukaiAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}）` : '（まだ）'}`}</p>
+      <p class="hint">連携コードを知っている人は、航海日誌に出す内容（名前・金額）を見られます。家族にだけ教えてください。</p>
+      <div class="row end">${KB.linkDel ? `<span class="confirm"><span>連携をやめますか？</span><button class="btn small danger" data-act="kb-link-del-yes">やめる</button><button class="btn small" data-act="kb-link-del-no">もどる</button></span>`
+        : '<button class="btn small danger" data-act="kb-link-del">連携をやめる</button>'}</div></section>`;
+  }
+  // 🎟 予定：航海日誌から届いた、予算・入るお金のついた予定（見るだけ）
+  function koukaiBlock() {
+    const now = today(), list = koukaiEvents().filter((e) => (e.end || e.date) >= addDays(now, -30)).sort((a, b) => a.date.localeCompare(b.date));
+    if (!list.length) return '';
+    return `<section class="sec"><h3 class="sec-title"><span class="mark">⚓</span> 航海日誌の予定（見るだけ）</h3>
+      <ul class="lines">${list.map((e) => `<li><div class="who">${esc(e.title || '（名前なし）')}<small>${esc(md(e.date))}${e.end && e.end !== e.date ? '〜' + esc(md(e.end)) : ''}${(e.end || e.date) < now ? '・おわった' : ''}</small></div>
+        <div class="amt">${e.budget ? `<span class="out">予算 ${yen(e.budget)}</span>` : ''}${e.budget && e.income ? '<br>' : ''}${e.income ? `<span class="in">入る ${yen(e.income)}</span>` : ''}</div></li>`).join('')}</ul>
+      <p class="hint">直すときは航海日誌で。</p></section>`;
+  }
+
   // ---------- 書き出し ----------
   function exportCsv(which) {
     const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -1016,5 +1159,5 @@ const Kakeibo = (ctx) => {
     return { m: +m.slice(5, 7), exp: x.exp, inc: x.inc, budget: b };
   }
 
-  return { view, sheetBody, title, submit, click, afterDraw, fillRecurring, widget, dueItems, state: KB, has: (k) => k.startsWith('kb-') };
+  return { view, sheetBody, title, submit, click, afterDraw, fillRecurring, widget, dueItems, publishLink, forecast, state: KB, has: (k) => k.startsWith('kb-') };
 };

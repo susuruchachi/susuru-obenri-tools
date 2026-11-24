@@ -23,6 +23,7 @@
     sheet: null, repay: null, claimForm: null, confirm: null,
     login: { email: '', pw: '', create: false, err: '', busy: false },
     pendingJoin: '', apk: { ready: false, silent: false },
+    cardId: '', cardMonth: '', // 💳 カード：えらんでいるカードと月
   };
   let S = KStore.state();
   // 自分の帳簿（家計簿）：kakeibo.js
@@ -225,10 +226,11 @@
         <div class="subtabs" role="tablist">
           <button role="tab" data-act="sub" data-v="summary" aria-selected="${U.sub === 'summary'}">まとめ</button>
           <button role="tab" data-act="sub" data-v="entries" aria-selected="${U.sub === 'entries'}">記録</button>
+          <button role="tab" data-act="sub" data-v="card" aria-selected="${U.sub === 'card'}">💳 カード</button>
         </div>
-        <button class="btn primary small" data-act="loan-new">＋ 貸した記録</button>
+        ${U.sub === 'card' ? '' : '<button class="btn primary small" data-act="loan-new">＋ 貸した記録</button>'}
       </div>
-      ${U.sub === 'summary' ? viewSummary(b) : viewEntries(b)}
+      ${U.sub === 'summary' ? viewSummary(b) : U.sub === 'card' ? viewCards(b) : viewEntries(b)}
     </section>`;
     return h;
   }
@@ -383,6 +385,176 @@
     </form>`;
   }
 
+  // ---------- 💳 家族のカード（親のカードで、きょうだいが昼食などを買う）----------
+  // 使った人：いつ・いくら・何に（とレシートの写真）を報告。持ち主：カードの明細の額を入れて、人ごと・月ごとに報告と合うかを見る
+  const cardsOf = (b) => (b ? S.cards[b.id] || [] : []);
+  const ymNow = () => today().slice(0, 7);
+  const ymAdd = (m, n) => { let y = +m.slice(0, 4), mo = +m.slice(5, 7) + n; while (mo > 12) { mo -= 12; y++; } while (mo < 1) { mo += 12; y--; } return `${y}-${String(mo).padStart(2, '0')}`; };
+  const dayDiff = (a, b2) => Math.abs((new Date(a) - new Date(b2)) / 86400000);
+  // 報告と明細を結ぶ：おなじ人・おなじ額で、日付が3日以内（いちばん近いもの）。明細に report があればそれを先に
+  function cardMatch(reps, chs) {
+    const used = new Set(), byReport = {};
+    reps.forEach((r) => { const c = chs.find((x) => x.report === r.id && x.for === r.by); if (c) { used.add(c.id); byReport[r.id] = c.id; } });
+    reps.slice().sort((a, b2) => a.date.localeCompare(b2.date)).forEach((r) => {
+      if (byReport[r.id]) return;
+      let best = null, bd = 99;
+      chs.forEach((c) => { if (used.has(c.id) || c.report || c.for !== r.by || c.amount !== r.amount) return; const dd = dayDiff(c.date, r.date); if (dd <= 3 && dd < bd) { best = c; bd = dd; } });
+      if (best) { used.add(best.id); byReport[r.id] = best.id; }
+    });
+    return { byReport, used };
+  }
+  function viewCards(b) {
+    const cards = cardsOf(b);
+    if (!cards.length) return `<p class="hint">家族のカード（親のカードなど）を、きょうだいで使うとき：使った人が「いつ・いくら・何に」とレシートの写真を報告して、カードの持ち主が明細の額を入れると、報告と合っているか・差額がいくらかを見られます。</p>
+      <div class="row"><button class="btn primary small" data-act="card-new">＋ カードを登録する（持ち主はあなた）</button></div>`;
+    const c = cards.find((x) => x.id === U.cardId) || cards[0];
+    if (!U.cardMonth) U.cardMonth = ymNow();
+    const m = U.cardMonth, holder = c.holder === me();
+    const reps = (S.cardReports[b.id] || []).filter((r) => r.card === c.id && r.date.startsWith(m));
+    const chs = (S.cardCharges[b.id] || []).filter((x) => x.card === c.id && x.date.startsWith(m));
+    const mt = cardMatch(reps, chs);
+    const ppl = holder ? [...new Set([...b.members.filter((id) => id !== c.holder), ...reps.map((r) => r.by), ...chs.map((x) => x.for)])] : [me()];
+    const sum = (l) => l.reduce((a, x) => a + x.amount, 0);
+    const rows = ppl.map((id) => {
+      const rp = sum(reps.filter((r) => r.by === id)), ch = sum(chs.filter((x) => x.for === id)), diff = ch - rp;
+      const st = !rp && !ch ? '<span class="faint">なし</span>' : !ch ? '<span class="tag soft">明細まだ</span>' : diff === 0 ? '<span class="tag ok">✓ 一致</span>' : `<span class="tag due">差 ${diff > 0 ? '+' : '−'}${yen(Math.abs(diff))}</span>`;
+      return `<tr><td>${nameH(b, id)}</td><td class="r num">${yen(rp)}</td><td class="r num">${ch ? yen(ch) : '—'}</td><td class="r">${st}</td></tr>`;
+    }).join('');
+    const myReps = (holder ? reps : reps.filter((r) => r.by === me())).sort((a, b2) => b2.date.localeCompare(a.date) || b2.createdAt - a.createdAt);
+    const lonely = chs.filter((x) => !mt.used.has(x.id) && (holder || x.for === me())).sort((a, b2) => b2.date.localeCompare(a.date));
+    const repRow = (r) => {
+      const ch = mt.byReport[r.id] ? chs.find((x) => x.id === mt.byReport[r.id]) : null, mine = r.by === me();
+      return `<li class="crep"><div class="crep-main"><div><b>${holder ? nameH(b, r.by) + '・' : ''}${esc(r.place || '（何に？）')}</b><small>${esc(fmtDate(r.date))}${r.memo ? '・' + esc(r.memo) : ''}</small></div><div class="num">${yen(r.amount)}</div></div>
+        <div class="row">${ch ? (ch.amount === r.amount ? `<span class="tag ok">✓ 明細あり${ch.date !== r.date ? `（${esc(fmtDate(ch.date))}）` : ''}</span>`
+            : `<span class="tag due">明細 ${yen(ch.amount)}（差 ${ch.amount > r.amount ? '+' : '−'}${yen(Math.abs(ch.amount - r.amount))}）</span>`) : '<span class="tag soft">明細なし</span>'}${r.checked ? '<span class="tag ok">持ち主が確認</span>' : ''}
+          ${r.hasPhoto ? `<button class="btn small" data-act="card-photo" data-id="${esc(r.id)}">📷 レシート</button>` : '<span class="faint" style="font-size:.74rem">写真なし</span>'}
+          <span class="grow"></span>
+          ${holder ? `${!ch ? `<button class="btn small" data-act="charge-from" data-id="${esc(r.id)}">この額で明細に</button>` : ''}<button class="btn small" data-act="card-check" data-id="${esc(r.id)}" data-v="${r.checked ? '' : '1'}">${r.checked ? '確認を外す' : '✓ 確認した'}</button>` : ''}
+          ${mine ? `<button class="btn small" data-act="creport-edit" data-id="${esc(r.id)}">直す</button>` : ''}</div></li>`;
+    };
+    return `<div class="row between">${cards.length > 1 ? `<div class="filters">${cards.map((x) => `<button class="pillbtn" data-act="card-pick" data-id="${esc(x.id)}" aria-pressed="${x.id === c.id}">💳 ${esc(x.name)}</button>`).join('')}</div>` : `<h3 class="sec-title">💳 ${esc(c.name)}</h3>`}
+        <button class="btn small" data-act="card-new">＋ カード</button></div>
+      <p class="hint">持ち主：${nameH(b, c.holder)}${holder ? '（あなた）・明細の額を入れると、報告と照らし合わせます' : '・使ったら、レシートの写真といっしょに報告してください'}${holder ? `　<button class="btn link" data-act="card-edit" data-id="${esc(c.id)}">カードを直す</button>` : ''}</p>
+      <div class="kb-nav"><button class="btn small" data-act="card-month" data-v="-1" aria-label="前の月">◀</button><h3 class="display">${+m.slice(0, 4)}年${+m.slice(5, 7)}月</h3><button class="btn small" data-act="card-month" data-v="1" aria-label="次の月">▶</button>
+        <span class="grow"></span>${holder ? '<button class="btn primary small" data-act="charge-new">＋ 明細を入れる</button>' : '<button class="btn primary small" data-act="creport-new">＋ 使ったのを報告</button>'}</div>
+      <div class="ctable"><table><thead><tr><th>だれ</th><th class="r">報告</th><th class="r">明細</th><th class="r"></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <h3 class="sec-title"><span class="mark">🧾</span> ${holder ? 'みんなの報告' : 'あなたの報告'}</h3>
+      ${myReps.length ? `<ul class="creps">${myReps.map(repRow).join('')}</ul>` : '<p class="empty">この月の報告はまだありません。</p>'}
+      ${lonely.length ? `<h3 class="sec-title"><span class="mark">⚠</span> 報告がない明細</h3><ul class="lines">${lonely.map((x) => `<li><div class="who">${holder ? nameH(b, x.for) + '・' : ''}${esc(x.place || '（明細）')}<small>${esc(fmtDate(x.date))}${x.memo ? '・' + esc(x.memo) : ''}</small>
+          ${holder ? `<button class="btn link" data-act="charge-edit" data-id="${esc(x.id)}">直す</button>` : '<span class="hint">報告してください</span>'}</div><div class="amt">${yen(x.amount)}</div></li>`).join('')}</ul>` : ''}`;
+  }
+  // 写真を小さくする（長い辺 1280px・JPEG。Firestore に入るように 700KB くらいまで）
+  function shrinkImage(file) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onerror = () => rej(new Error('写真を読めませんでした'));
+      fr.onload = () => {
+        const img = new Image();
+        img.onerror = () => rej(new Error('写真を読めませんでした'));
+        img.onload = () => {
+          let max = 1280, d = '';
+          for (let t = 0; t < 4; t++, max = Math.round(max * 0.75)) {
+            const k = Math.min(1, max / Math.max(img.width, img.height)), w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+            const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+            const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+            for (let q = 0.72; q >= 0.4; q -= 0.08) { d = cv.toDataURL('image/jpeg', q); if (d.length < 700000) return res(d); }
+          }
+          res(d);
+        };
+        img.src = fr.result;
+      };
+      fr.readAsDataURL(file);
+    });
+  }
+  function cardSheetBody(k, X, b) {
+    if (k === 'card') return `<div class="field"><label for="cd-name">カードの名前</label><input id="cd-name" maxlength="30" data-bind="sheet.name" value="${esc(X.name)}" placeholder="例：お母さんのカード"></div>
+      <p class="hint">持ち主（明細を入れる人）は、あなたになります。</p>
+      ${X.id ? (X.del ? `<div class="confirm"><span>このカードを消しますか？（報告・明細は残ります）</span><button type="button" class="btn small danger" data-act="card-del-yes">消す</button><button type="button" class="btn small" data-act="card-del-no">やめる</button></div>` : '<div class="row"><button type="button" class="btn small danger" data-act="card-del">消す</button></div>') : ''}
+      ${foot('保存する')}`;
+    if (k === 'creport') return `<div class="two">
+        <div class="field"><label for="cr-amount">使った額</label><div class="yen"><span>¥</span><input id="cr-amount" inputmode="numeric" data-bind="sheet.amount" value="${esc(X.amount)}" placeholder="0"></div></div>
+        <div class="field"><label for="cr-date">使った日</label><input id="cr-date" type="date" data-bind="sheet.date" value="${esc(X.date)}"></div></div>
+      <div class="field"><label for="cr-place">何に・どこで</label><input id="cr-place" maxlength="40" list="cr-places" data-bind="sheet.place" value="${esc(X.place)}" placeholder="例：コンビニで昼ごはん"><datalist id="cr-places">${[...new Set((S.cardReports[b.id] || []).filter((r) => r.by === me()).map((r) => r.place).filter(Boolean))].slice(0, 20).map((p) => `<option value="${esc(p)}">`).join('')}</datalist></div>
+      <div class="field"><label for="cr-photo">レシートの写真</label>
+        ${X.preview ? `<img class="receipt" src="${esc(X.preview)}" alt="レシートの写真">` : X.hasPhoto && X.photo === null ? '<p class="hint">📷 写真あり（入れ替えるときは、下でえらび直す）</p>' : ''}
+        <input id="cr-photo" type="file" accept="image/*" capture="environment">
+        ${X.preview || (X.hasPhoto && X.photo === null) ? '<div class="row"><button type="button" class="btn small" data-act="cr-photo-clear">写真を外す</button></div>' : ''}
+        <span class="hint" id="cr-photo-note">${X.busy ? '写真を小さくしています…' : ''}</span></div>
+      <div class="field"><label for="cr-memo">メモ（なくてもOK）</label><input id="cr-memo" maxlength="200" data-bind="sheet.memo" value="${esc(X.memo)}"></div>
+      ${X.id ? (X.del ? `<div class="confirm"><span>この報告を消しますか？</span><button type="button" class="btn small danger" data-act="creport-del-yes">消す</button><button type="button" class="btn small" data-act="card-del-no">やめる</button></div>` : '<div class="row"><button type="button" class="btn small danger" data-act="card-del">消す</button></div>') : ''}
+      ${foot(X.id ? '保存する' : '報告する')}`;
+    if (k === 'charge') {
+      const c = cardsOf(b).find((x) => x.id === X.card) || {};
+      const ppl = b.members.filter((id) => id !== c.holder);
+      return `<p class="hint">カードの明細（利用明細）に出ている額を入れます。</p>
+      <fieldset><legend>だれが使った？</legend><div class="filters">${ppl.map((id) => `<button type="button" class="pillbtn" data-act="charge-for" data-v="${esc(id)}" aria-pressed="${X.for === id}">${esc(nameIn(b, id))}</button>`).join('')}</div></fieldset>
+      <div class="two">
+        <div class="field"><label for="ch-amount">明細の額</label><div class="yen"><span>¥</span><input id="ch-amount" inputmode="numeric" data-bind="sheet.amount" value="${esc(X.amount)}" placeholder="0"></div></div>
+        <div class="field"><label for="ch-date">明細の日付</label><input id="ch-date" type="date" data-bind="sheet.date" value="${esc(X.date)}"></div></div>
+      <div class="field"><label for="ch-place">明細の利用先</label><input id="ch-place" maxlength="40" data-bind="sheet.place" value="${esc(X.place)}" placeholder="例：セブンイレブン"></div>
+      <div class="field"><label for="ch-memo">メモ（なくてもOK）</label><input id="ch-memo" maxlength="200" data-bind="sheet.memo" value="${esc(X.memo)}"></div>
+      ${X.id ? (X.del ? `<div class="confirm"><span>この明細を消しますか？</span><button type="button" class="btn small danger" data-act="charge-del-yes">消す</button><button type="button" class="btn small" data-act="card-del-no">やめる</button></div>` : '<div class="row"><button type="button" class="btn small danger" data-act="card-del">消す</button></div>') : ''}
+      ${foot('保存する')}`;
+    }
+    if (k === 'cphoto') return X.data ? `<img class="receipt big" src="${esc(X.data)}" alt="レシートの写真"><div class="row end"><button type="button" class="btn" data-act="sheet-close">とじる</button></div>`
+      : `<p class="empty">${X.err ? esc(X.err) : '写真を読み込み中…'}</p><div class="row end"><button type="button" class="btn" data-act="sheet-close">とじる</button></div>`;
+    return '';
+  }
+  async function submitCardSheet(k) {
+    const X = U.sheet, b = book();
+    if (k === 'card') {
+      const name = X.name.trim(); if (!name) return sheetErr('カードの名前を入れてください');
+      run(KStore.saveCard(b.id, X.id, name).then((id) => { U.cardId = id; }), '✓ カードを保存しました'); closeSheet(); return;
+    }
+    if (k === 'creport') {
+      const amount = toInt(X.amount);
+      if (amount <= 0) return sheetErr('使った額を入れてください');
+      if (!okDate(X.date)) return sheetErr('使った日を入れてください');
+      if (!X.place.trim()) return sheetErr('何に・どこで使ったかを入れてください');
+      if (X.busy) return sheetErr('写真を小さくしています。少し待ってください');
+      const id = X.id || KStore.newCardReportId(b.id);
+      run(KStore.saveCardReport(b.id, id, { card: X.card, date: X.date, amount, place: X.place.trim(), memo: X.memo.trim(), hasPhoto: X.hasPhoto, checked: X.checked || false, createdAt: X.createdAt || 0 }, X.photo),
+        X.id ? '✓ 直しました' : `✓ ${yen(amount)} を報告しました${X.photo ? '（写真つき）' : ''}`);
+      U.cardMonth = X.date.slice(0, 7); closeSheet(); return;
+    }
+    if (k === 'charge') {
+      const amount = toInt(X.amount);
+      if (!X.for) return sheetErr('だれが使ったかをえらんでください');
+      if (amount <= 0) return sheetErr('明細の額を入れてください');
+      if (!okDate(X.date)) return sheetErr('明細の日付を入れてください');
+      run(KStore.saveCardCharge(b.id, X.id, { card: X.card, for: X.for, date: X.date, amount, place: X.place.trim(), memo: X.memo.trim(), report: X.report || '', createdAt: X.createdAt || 0 }), '✓ 明細を入れました');
+      U.cardMonth = X.date.slice(0, 7); closeSheet();
+    }
+  }
+  function cardClick(a, d) {
+    const b = book(), X = U.sheet, c = cardsOf(b).find((x) => x.id === U.cardId) || cardsOf(b)[0];
+    switch (a) {
+      case 'card-new': openSheet('card', { id: null, name: '', del: false }); return true;
+      case 'card-edit': { const x = cardsOf(b).find((y) => y.id === d.id); if (x) openSheet('card', { id: x.id, name: x.name, del: false }); return true; }
+      case 'card-pick': U.cardId = d.id; render(); return true;
+      case 'card-month': U.cardMonth = ymAdd(U.cardMonth || ymNow(), +d.v); render(); return true;
+      case 'creport-new': openSheet('creport', { id: null, card: c.id, date: today(), amount: '', place: '', memo: '', photo: null, hasPhoto: false, preview: '', del: false }); return true;
+      case 'creport-edit': { const r = (S.cardReports[b.id] || []).find((y) => y.id === d.id); if (r) openSheet('creport', { ...r, amount: String(r.amount), photo: null, preview: '', del: false }); return true; }
+      case 'cr-photo-clear': if (X) { X.photo = ''; X.preview = ''; X.hasPhoto = false; drawSheet(); } return true;
+      case 'charge-new': openSheet('charge', { id: null, card: c.id, for: '', date: today(), amount: '', place: '', memo: '', report: '', del: false }); return true;
+      case 'charge-edit': { const x = (S.cardCharges[b.id] || []).find((y) => y.id === d.id); if (x) openSheet('charge', { ...x, amount: String(x.amount), del: false }); return true; }
+      case 'charge-from': { const r = (S.cardReports[b.id] || []).find((y) => y.id === d.id); if (r) openSheet('charge', { id: null, card: r.card, for: r.by, date: r.date, amount: String(r.amount), place: r.place, memo: '', report: r.id, del: false }); return true; }
+      case 'charge-for': if (X) { X.for = d.v; drawSheet(); } return true;
+      case 'card-check': run(KStore.checkCardReport(b.id, d.id, d.v === '1'), d.v === '1' ? '✓ 確認しました' : '確認を外しました'); return true;
+      case 'card-photo': {
+        openSheet('cphoto', { rid: d.id, data: '', err: '' });
+        KStore.getCardPhoto(b.id, d.id).then((data) => { if (U.sheet && U.sheet.rid === d.id) { U.sheet.data = data; U.sheet.err = data ? '' : '写真が見つかりません'; drawSheet(); } }, (e) => { if (U.sheet) { U.sheet.err = errText(e); drawSheet(); } });
+        return true;
+      }
+      case 'card-del': if (X) { X.del = true; drawSheet(); } return true;
+      case 'card-del-no': if (X) { X.del = false; drawSheet(); } return true;
+      case 'card-del-yes': run(KStore.deleteCard(b.id, X.id), 'カードを消しました'); U.cardId = ''; closeSheet(); return true;
+      case 'creport-del-yes': run(KStore.deleteCardReport(b.id, X.id, X.hasPhoto), '報告を消しました'); closeSheet(); return true;
+      case 'charge-del-yes': run(KStore.deleteCardCharge(b.id, X.id), '明細を消しました'); closeSheet(); return true;
+      default: return false;
+    }
+  }
+
   // ---------- 自分だけの帳簿 ----------
   function viewPersonal() {
     if (!S.privateReady) return `<section class="sec"><p class="empty">読み込み中…</p></section>`;
@@ -452,12 +624,18 @@
     else if (kind === 'rename') U.sheet = { ...base, nick: b ? b.names[me()] || '' : '' };
     else if (kind === 'renamebook') U.sheet = { ...base, name: b ? b.name : '' };
     else if (kind === 'loan') U.sheet = { ...base, ...extra };
-    else if (kind === 'pentry' || KB.has(kind)) U.sheet = { ...base, ...extra, sheetKind: kind };
+    else if (kind === 'pentry' || KB.has(kind) || ['card', 'creport', 'charge', 'cphoto'].includes(kind)) U.sheet = { ...base, ...extra, sheetKind: kind };
     else if (kind === 'delbook') U.sheet = { ...base, confirmName: '' };
     else U.sheet = base;
     drawSheet();
     if (kind === 'join' && U.sheet.code) peekJoin();
-    setTimeout(() => { const el = $('#sheet input:not([type=checkbox]):not([type=date]), #sheet textarea'); if (el && kind !== 'invite' && kind !== 'books' && kind !== 'account') el.focus(); }, 30);
+    // 最初の欄にカーソルを置く（もうどこかに入力しはじめていたら動かさない）
+    setTimeout(() => {
+      const box = $('#sheet'), act = document.activeElement;
+      if (act && box.contains(act) && act.matches('input, textarea, select')) return;
+      const el = $('#sheet input:not([type=checkbox]):not([type=date]):not([type=file]), #sheet textarea');
+      if (el && kind !== 'invite' && kind !== 'books' && kind !== 'account' && kind !== 'cphoto') el.focus();
+    }, 30);
   }
   function closeSheet() { U.sheet = null; drawSheet(); render(); }
   function drawSheet() {
@@ -465,7 +643,7 @@
     const box = $('#sheet');
     if (!U.sheet) { box.innerHTML = ''; return; }
     const k = U.sheet.sheetKind;
-    const title = KB.has(k) ? KB.title(k) : { appinfo: '⚙️ アプリと更新', delbook: '帳簿を消す', leavebook: '帳簿から抜ける', newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
+    const title = KB.has(k) ? KB.title(k) : { card: U.sheet.id ? '💳 カードを直す' : '💳 カードを登録する', creport: U.sheet.id ? '🧾 報告を直す' : '🧾 使ったのを報告', charge: U.sheet.id ? '明細を直す' : '明細を入れる', cphoto: '📷 レシート', appinfo: '⚙️ アプリと更新', delbook: '帳簿を消す', leavebook: '帳簿から抜ける', newbook: '帳簿をつくる', join: '招待コードで参加', invite: '招待する', books: '帳簿', rename: '呼び名を変える', renamebook: '帳簿の名前を変える', loan: U.sheet.id ? '記録を直す' : '貸した記録をつける', pentry: U.sheet.id ? '記録を直す' : '自分だけの帳簿に書く', account: 'アカウント' }[k];
     box.innerHTML = `<div class="backdrop" data-act="backdrop"><form class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title" data-form="sheet">
       <div class="sheet-head"><h2 id="sh-title">${title}</h2><button type="button" class="close" data-act="sheet-close" aria-label="閉じる">×</button></div>
       ${KB.has(k) ? KB.sheetBody(k) : sheetBody(k)}
@@ -516,6 +694,7 @@
       ${S.error ? `<p class="err">⚠️ ${esc(S.error)}</p>` : ''}
       <div class="row end"><button type="button" class="btn danger" data-act="logout">ログアウト</button></div>`;
     if (k === 'appinfo') return appInfoBody();
+    if (['card', 'creport', 'charge', 'cphoto'].includes(k)) return cardSheetBody(k, X, b);
     if (k === 'delbook') return `
       <p class="hint">「${esc(b.name)}」と、中の記録（${loansOf(b).length}件）・返したよを<b>ぜんぶ消します</b>。参加しているみんなの画面からも消えて、もとに戻せません。</p>
       <p class="hint">消すときは、下に帳簿の名前「${esc(b.name)}」を打ってください。</p>
@@ -725,6 +904,7 @@
     if (X.sheetKind === 'loan') return saveLoan();
     if (X.sheetKind === 'pentry') return savePentry();
     if (X.sheetKind === 'delbook') return deleteBook();
+    if (['card', 'creport', 'charge'].includes(X.sheetKind)) return submitCardSheet(X.sheetKind);
     if (X.sheetKind === 'newbook') {
       const name = X.name.trim(), nick = X.nick.trim();
       if (!name) return sheetErr('帳簿の名前を入れてください');
@@ -885,6 +1065,11 @@
     onBind(e);
     if (e.target.id === 'show-done') { U.showDone = e.target.checked; render(); }
     if (e.target.id === 'pshow-done') { U.pShowDone = e.target.checked; render(); }
+    if (e.target.id === 'cr-photo' && U.sheet && e.target.files && e.target.files[0]) {
+      const X = U.sheet; X.busy = true; const note = $('#cr-photo-note'); if (note) note.textContent = '写真を小さくしています…';
+      shrinkImage(e.target.files[0]).then((data) => { X.busy = false; X.photo = data; X.preview = data; X.hasPhoto = true; if (U.sheet === X) drawSheet(); },
+        (err) => { X.busy = false; if (U.sheet === X) sheetErr(err.message || '写真を読めませんでした'); });
+    }
   });
   document.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -980,7 +1165,7 @@
       case 'page-reload': location.reload(); return;
       case 'leave-yes': { const b = book(); if (b) { run(KStore.leaveBook(b.id), `「${b.name}」から抜けました`); U.bookId = ''; store('kashikari-book', null); } closeSheet(); return; }
       case 'delbook-go': deleteBook(); return;
-      default: { const r = KB.click(a, d); if (r === 'render') break; return; }
+      default: { if (cardClick(a, d)) return; const r = KB.click(a, d); if (r === 'render') break; return; }
     }
     render();
     if (a === 'repay-open' || a === 'prepay-open' || a === 'claim-open') setTimeout(() => { const i = $('#rp-amount') || $('#cl-amount'); if (i) { i.focus(); i.select(); } }, 40);
@@ -1017,6 +1202,7 @@
     }
     render();
     KB.fillRecurring();
+    KB.publishLink();
     kkSendWidget(S);
   });
   $('#appBtn').addEventListener('click', () => { openSheet('appinfo'); kkFetchLatest(); });

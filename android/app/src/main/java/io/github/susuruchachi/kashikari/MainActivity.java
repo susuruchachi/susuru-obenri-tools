@@ -24,6 +24,8 @@ import android.provider.MediaStore;
 import android.util.Base64;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -47,6 +49,8 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
 
 import org.json.JSONObject;
 
+import androidx.core.content.FileProvider;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
@@ -61,6 +65,10 @@ public class MainActivity extends Activity {
     private boolean pageLoaded = false;
     private String lastUrl = null;
     private final Executor bg = Executors.newSingleThreadExecutor();
+    // 写真をえらぶ（<input type="file">。💳 カードのレシートの写真・1.6.0 から）
+    private static final int REQ_FILE = 42;
+    private ValueCallback<Uri[]> fileCb;
+    private Uri camUri;
     // 記録を書いている途中でないか（ウェブ版が apkSetIdle で知らせる）。途中なら、裏に回っても入れ替えない
     static volatile boolean jsIdle = true;
 
@@ -107,6 +115,30 @@ public class MainActivity extends Activity {
                 if (!req.isForMainFrame()) return;
                 lastUrl = req.getUrl().toString();
                 showOffline(err == null ? "" : String.valueOf(err.getDescription()));
+            }
+        });
+
+        // <input type="file">：ギャラリー・ファイルからえらぶか、カメラでとる（WebView はそのままでは何もしないので、アプリが出す）
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (fileCb != null) fileCb.onReceiveValue(null);
+                fileCb = cb;
+                Intent pick = new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+                Intent chooser = Intent.createChooser(pick, "レシートの写真");
+                camUri = null;
+                try {
+                    File dir = new File(getCacheDir(), "camera");
+                    dir.mkdirs();
+                    File f = new File(dir, "receipt_" + System.currentTimeMillis() + ".jpg");
+                    camUri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".files", f);
+                    Intent cam = new Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, camUri)
+                        .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    if (cam.resolveActivity(getPackageManager()) != null) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[] { cam });
+                } catch (Exception e) { camUri = null; }
+                try { startActivityForResult(chooser, REQ_FILE); }
+                catch (Exception e) { fileCb = null; toast("写真をえらぶ画面を開けませんでした"); return false; }
+                return true;
             }
         });
 
@@ -162,6 +194,25 @@ public class MainActivity extends Activity {
         if (pageLoaded) {
             web.evaluateJavascript("window.__kashikariOpen?window.__kashikariOpen(" + JSONObject.quote(view == null ? "" : view) + "):location.assign(" + JSONObject.quote(d.toString()) + ")", null);
         } else web.loadUrl(d.toString());
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        if (req == REQ_FILE && fileCb != null) {
+            Uri[] r = null;
+            if (res == RESULT_OK) {
+                if (data != null && data.getData() != null) r = new Uri[] { data.getData() };
+                else if (camUri != null) {
+                    // カメラでとったとき：ファイルができていれば、それを渡す
+                    File f = new File(new File(getCacheDir(), "camera"), camUri.getLastPathSegment() == null ? "" : camUri.getLastPathSegment());
+                    if (f.exists() && f.length() > 0) r = new Uri[] { camUri };
+                }
+            }
+            fileCb.onReceiveValue(r);
+            fileCb = null;
+            return;
+        }
+        super.onActivityResult(req, res, data);
     }
 
     @Override

@@ -15,14 +15,16 @@
   const BOOKS = 'kashikari_books', PRIVATE = 'kashikari_private';
 
   let auth = null, db = null, user = null;
-  let booksUnsub = null, privUnsub = null, txUnsub = null, kbUnsub = null, shUnsub = null;
+  let booksUnsub = null, privUnsub = null, txUnsub = null, kbUnsub = null, shUnsub = null, linkUnsub = null, linkCode = '';
   const bookSubs = {}; // 帳簿ID -> [unsub, unsub]
   const st = {
     available: false, configMissing: !(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId), authReady: false, user: null, error: '',
     online: typeof navigator === 'undefined' || navigator.onLine !== false, pending: false,
     booksReady: false, books: [], loans: {}, claims: {}, privateReady: false, personal: [],
+    cards: {}, cardReports: {}, cardCharges: {}, // 家族のカード（帳簿ID ごと）
     txReady: false, tx: [], kbReady: false, kb: null, // 家計簿（収入・支出・振替）と、その設定（分類・口座・予算・固定費）
     shiftsReady: false, shifts: [], // 固定費・定期収入の前借り・後払い
+    link: null, // 航海日誌との連携：kashikari_links/{連携コード} = { owner, feed, warn, feedAt, koukai: 航海日誌の予定, koukaiAt }
   };
   const listeners = new Set();
   let emitQueued = false;
@@ -112,7 +114,17 @@
       st.claims = { ...st.claims, [id]: snap.docs.map((d) => cleanClaim(d.id, d.data())) };
       emit();
     }, failed);
-    bookSubs[id] = [a, b];
+    // 家族のカード：カード・使った報告（写真は別の文書 cardPhotos/{報告ID}）・持ち主が入れた明細
+    const c1 = ref.collection('cards').onSnapshot((snap) => { st.cards = { ...st.cards, [id]: snap.docs.map((d) => ({ id: d.id, name: str(d.data().name, 30) || 'カード', holder: str(d.data().holder, 128), createdAt: num(d.data().createdAt) })) }; emit(); }, failed);
+    const c2 = ref.collection('cardReports').onSnapshot((snap) => {
+      st.cardReports = { ...st.cardReports, [id]: snap.docs.map((d) => { const v = d.data(); return { id: d.id, card: str(v.card, 40), by: str(v.by, 128), date: day(v.date), amount: num(v.amount), place: str(v.place, 40), memo: str(v.memo, 200), hasPhoto: v.hasPhoto === true, checked: v.checked === true, createdAt: num(v.createdAt) }; }) };
+      emit();
+    }, failed);
+    const c3 = ref.collection('cardCharges').onSnapshot((snap) => {
+      st.cardCharges = { ...st.cardCharges, [id]: snap.docs.map((d) => { const v = d.data(); return { id: d.id, card: str(v.card, 40), for: str(v.for, 128), date: day(v.date), amount: num(v.amount), place: str(v.place, 40), memo: str(v.memo, 200), report: str(v.report, 40), createdAt: num(v.createdAt) }; }) };
+      emit();
+    }, failed);
+    bookSubs[id] = [a, b, c1, c2, c3];
   }
   function unwatchBook(id, keepData) {
     (bookSubs[id] || []).forEach((u) => { try { u(); } catch (e) {} });
@@ -121,6 +133,7 @@
     if (keepData) return;
     const l = { ...st.loans }; delete l[id]; st.loans = l;
     const c = { ...st.claims }; delete c[id]; st.claims = c;
+    ['cards', 'cardReports', 'cardCharges'].forEach((k) => { const x = { ...st[k] }; delete x[id]; st[k] = x; });
   }
   function stopAll() {
     if (booksUnsub) { try { booksUnsub(); } catch (e) {} booksUnsub = null; }
@@ -128,9 +141,10 @@
     if (txUnsub) { try { txUnsub(); } catch (e) {} txUnsub = null; }
     if (kbUnsub) { try { kbUnsub(); } catch (e) {} kbUnsub = null; }
     if (shUnsub) { try { shUnsub(); } catch (e) {} shUnsub = null; }
+    if (linkUnsub) { try { linkUnsub(); } catch (e) {} linkUnsub = null; } linkCode = ''; st.link = null;
     st.tx = []; st.kb = null; st.txReady = false; st.kbReady = false; st.shifts = []; st.shiftsReady = false;
     Object.keys(bookSubs).concat(Object.keys(retryTimers)).forEach((id) => unwatchBook(id));
-    st.books = []; st.loans = {}; st.claims = {}; st.personal = []; st.booksReady = false; st.privateReady = false;
+    st.books = []; st.loans = {}; st.claims = {}; st.cards = {}; st.cardReports = {}; st.cardCharges = {}; st.personal = []; st.booksReady = false; st.privateReady = false;
   }
   function start() {
     stopAll();
@@ -283,7 +297,7 @@
       const ref = bookRef(id);
       const b = await ref.get();
       if (b.exists && b.data().closing !== true) await ref.update({ closing: true });
-      for (const sub of ['loans', 'claims']) {
+      for (const sub of ['loans', 'claims', 'cards', 'cardReports', 'cardPhotos', 'cardCharges']) {
         const docs = (await ref.collection(sub).get()).docs;
         for (let i = 0; i < docs.length; i += 400) {
           const batch = db.batch();
@@ -380,6 +394,62 @@
       });
       await b.commit();
     },
+    // ---- 家族のカード ----
+    async saveCard(bookId, id, name) {
+      need();
+      const ref = id ? bookRef(bookId).collection('cards').doc(id) : bookRef(bookId).collection('cards').doc();
+      await ref.set({ name, holder: user.uid, createdAt: now() }, { merge: true });
+      return ref.id;
+    },
+    async deleteCard(bookId, id) { need(); await bookRef(bookId).collection('cards').doc(id).delete(); },
+    newCardReportId(bookId) { need(); return bookRef(bookId).collection('cardReports').doc().id; },
+    // 使った報告（写真があれば、別の文書に入れる。photo：null＝そのまま、''＝消す、data:…＝入れ替える）
+    async saveCardReport(bookId, id, body, photo) {
+      need();
+      const b = db.batch(), r = bookRef(bookId);
+      const hasPhoto = photo === null ? !!body.hasPhoto : !!photo;
+      b.set(r.collection('cardReports').doc(id), clean({ ...body, hasPhoto, by: user.uid, createdAt: body.createdAt || now(), updatedAt: now() }));
+      if (photo) b.set(r.collection('cardPhotos').doc(id), { card: body.card, by: user.uid, data: photo });
+      else if (photo === '') b.delete(r.collection('cardPhotos').doc(id));
+      await b.commit();
+    },
+    async deleteCardReport(bookId, id, hasPhoto) {
+      need();
+      const b = db.batch(), r = bookRef(bookId);
+      b.delete(r.collection('cardReports').doc(id));
+      if (hasPhoto) b.delete(r.collection('cardPhotos').doc(id));
+      await b.commit();
+    },
+    async checkCardReport(bookId, id, checked) { need(); await bookRef(bookId).collection('cardReports').doc(id).update({ checked, checkedAt: now() }); },
+    async getCardPhoto(bookId, id) { need(); const s = await bookRef(bookId).collection('cardPhotos').doc(id).get(); return s.exists ? s.data().data || '' : ''; },
+    async saveCardCharge(bookId, id, body) {
+      need();
+      const ref = id ? bookRef(bookId).collection('cardCharges').doc(id) : bookRef(bookId).collection('cardCharges').doc();
+      await ref.set(clean({ ...body, createdAt: body.createdAt || now(), updatedAt: now() }));
+    },
+    async deleteCardCharge(bookId, id) { need(); await bookRef(bookId).collection('cardCharges').doc(id).delete(); },
+
+    // ---- 航海日誌との連携（連携コード＝文書のID を知っているアプリだけが読める。航海日誌は koukai だけ書ける）----
+    async linkCreate() {
+      need();
+      const b = new Uint8Array(18); crypto.getRandomValues(b);
+      const code = btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '').replace(/[-_]/g, 'x');
+      await db.collection('kashikari_links').doc(code).set({ owner: user.uid, feed: [], warn: null, feedAt: now(), koukai: [], koukaiAt: 0 });
+      return code;
+    },
+    // 自分の連携の文書を見ておく（航海日誌から届く予定）
+    linkWatch(code) {
+      if (!db || !user || code === linkCode) return;
+      if (linkUnsub) { try { linkUnsub(); } catch (e) {} linkUnsub = null; }
+      linkCode = code || ''; st.link = null;
+      if (!code) { emit(); return; }
+      linkUnsub = db.collection('kashikari_links').doc(code).onSnapshot((snap) => {
+        st.link = snap.exists ? { code, ...snap.data() } : { code, missing: true };
+        emit();
+      }, () => { st.link = { code, missing: true }; emit(); });
+    },
+    async linkPublish(code, feed, warn) { need(); await db.collection('kashikari_links').doc(code).set(clean({ owner: user.uid, feed, warn: warn || null, feedAt: now() }), { merge: true }); },
+    async linkDelete(code) { need(); try { await db.collection('kashikari_links').doc(code).delete(); } catch (e) {} },
     async saveKb(settings) { need(); await db.collection(PRIVATE).doc(user.uid).collection('kakeibo').doc('settings').set(clean({ ...settings, updatedAt: now() })); },
   };
   init();

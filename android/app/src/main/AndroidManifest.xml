@@ -10,6 +10,10 @@
     <!-- ★【1.4.0】 すするアプリ（ランチャー）が入っているかを見る（LauncherInstaller） -->
     <queries>
         <package android:name="io.github.susuruchachi.susurulauncher" />
+        <!-- カメラのアプリがあるか（レシートの写真をとる・1.6.0 から） -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
     </queries>
 
     <application
@@ -48,6 +52,11 @@
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_kashikari_info" />
         </receiver>
+        <!-- カメラでとったレシートの写真を、カメラのアプリから受け取る（1.6.0 から） -->
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
         <!-- アプリの自動更新（入れた結果・閉じて1分後に起こす） -->
         <receiver android:name=".InstallResultReceiver" android:exported="false" />
         <!-- ★【1.4.0】 すするアプリを入れた結果（LauncherInstaller） -->

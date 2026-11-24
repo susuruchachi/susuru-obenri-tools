@@ -5,7 +5,7 @@
 // 依存: ledger.js
 
 // 公開している APK の versionCode（android/app/build.gradle と同じ数。作り直したら上げる）
-const ANDROID_APK_CODE = 7;
+const ANDROID_APK_CODE = 8;
 const ANDROID_APK_URL = 'https://github.com/susuruchachi/susuru-obenri-tools/raw/main/apk/kashikari.apk';
 const ANDROID_APK_SELF_URL = new URL('../apk/kashikari.apk', window.location.href.split(/[?#]/)[0].replace(/[^/]*$/, '')).toString();
 // いちばん新しい版の情報（{ code, name, date, notes }）。「更新を確認する」で毎回読む（古い画面が残っていても正しくわかるように）
