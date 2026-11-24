@@ -4,6 +4,8 @@
 //     帳簿ID を知っている人（招待リンク・招待コード）だけが中を見て、参加できる
 //   貸した記録：kashikari_books/{帳簿ID}/loans/{id} = { lender, title, date, memo, mode, total, includeSelf, shares: [{ to, amount, repayments: [{ id, date, amount, claim? }] }], createdAt, updatedAt }
 //     書けるのは貸した人（lender）だけ（Firestore のルールで決めている。kashikari/firestore.rules）
+//   付け替え：kashikari_books/{帳簿ID}/handoffs/{id} = { loanId, lender, from: いま借りている人, to: 代わりに返す人, by: 頼んだ人, amount, note, title,
+//             toOk, lenderOk, status: pending|done|declined|rejected, newLoanId, createdAt, decidedAt }
 //   返したよ：kashikari_books/{帳簿ID}/claims/{id} = { loanId, lender, from, amount, date, note, status: pending|approved|rejected, createdAt, decidedAt }
 //     借りた人が出して、貸した人が「認める」と、貸した記録に返済が入る
 // ・自分だけの帳簿：kashikari_private/{uid}/entries/{id} = { dir: lent|borrowed, who, title, date, memo, amount, repayments, createdAt, updatedAt }（本人しか読めない）
@@ -20,7 +22,7 @@
   const st = {
     available: false, configMissing: !(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId), authReady: false, user: null, error: '',
     online: typeof navigator === 'undefined' || navigator.onLine !== false, pending: false,
-    booksReady: false, books: [], loans: {}, claims: {}, privateReady: false, personal: [],
+    booksReady: false, books: [], loans: {}, claims: {}, handoffs: {}, privateReady: false, personal: [],
     cards: {}, cardReports: {}, cardCharges: {}, // 家族のカード（帳簿ID ごと）
     txReady: false, tx: [], kbReady: false, kb: null, // 家計簿（収入・支出・振替）と、その設定（分類・口座・予算・固定費）
     shiftsReady: false, shifts: [], // 固定費・定期収入の前借り・後払い
@@ -37,7 +39,7 @@
   // ---- 読んだデータを整える（ほかの人が書いたものなので、形を確かめる）----
   const num = (v) => (typeof v === 'number' && isFinite(v) && v >= 0 ? Math.round(v) : 0);
   const str = (v, n) => (typeof v === 'string' ? v.slice(0, n || 200) : '');
-  const reps = (a) => (Array.isArray(a) ? a.filter((r) => r && typeof r === 'object').map((r) => ({ id: str(r.id, 40), date: str(r.date, 10), amount: num(r.amount), claim: str(r.claim, 40), by: str(r.by, 128) })) : []);
+  const reps = (a) => (Array.isArray(a) ? a.filter((r) => r && typeof r === 'object').map((r) => ({ id: str(r.id, 40), date: str(r.date, 10), amount: num(r.amount), claim: str(r.claim, 40), by: str(r.by, 128), handoff: str(r.handoff, 40), moveTo: str(r.moveTo, 128) })) : []);
   const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : '');
   function cleanBook(id, v) {
     v = v || {};
@@ -53,8 +55,18 @@
       due: day(v.due), paidTo: str(v.paidTo, 128), paidToName: str(v.paidToName, 30),
       // 肩代わり（ほかの人の借りを代わりに返した）：{ claimId, loanId, lender: 返した先, for: 代わりに返してあげた人, title: 元の記録 }
       via: v.via && typeof v.via === 'object' ? { claimId: str(v.via.claimId, 40), loanId: str(v.via.loanId, 40), lender: str(v.via.lender, 128), for: str(v.via.for, 128), title: str(v.via.title, 60) } : null,
+      // 付け替え（from の借りを、この記録の借り手が引き受けた）：{ id: 付け替えID, loanId: 元の記録, from: 元の借り手, title: 元の記録の内容 }
+      handoff: v.handoff && typeof v.handoff === 'object' ? { id: str(v.handoff.id, 40), loanId: str(v.handoff.loanId, 40), from: str(v.handoff.from, 128), title: str(v.handoff.title, 60) } : null,
       shares: Array.isArray(v.shares) ? v.shares.filter((s) => s && typeof s.to === 'string').map((s) => ({ to: s.to, amount: num(s.amount), repayments: reps(s.repayments) })) : [],
       createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
+    };
+  }
+  function cleanHandoff(id, v) {
+    v = v || {};
+    return {
+      id, loanId: str(v.loanId, 40), lender: str(v.lender, 128), from: str(v.from, 128), to: str(v.to, 128), by: str(v.by, 128), amount: num(v.amount),
+      note: str(v.note, 100), title: str(v.title, 60), toOk: v.toOk === true, lenderOk: v.lenderOk === true,
+      status: ['done', 'declined', 'rejected'].includes(v.status) ? v.status : 'pending', newLoanId: str(v.newLoanId, 40), createdAt: num(v.createdAt), decidedAt: num(v.decidedAt),
     };
   }
   function cleanClaim(id, v) {
@@ -125,7 +137,11 @@
       st.cardCharges = { ...st.cardCharges, [id]: snap.docs.map((d) => { const v = d.data(); return { id: d.id, card: str(v.card, 40), for: str(v.for, 128), date: day(v.date), amount: num(v.amount), place: str(v.place, 40), memo: str(v.memo, 200), report: str(v.report, 40), createdAt: num(v.createdAt) }; }) };
       emit();
     }, failed);
-    bookSubs[id] = [a, b, c1, c2, c3];
+    const h = ref.collection('handoffs').onSnapshot((snap) => {
+      st.handoffs = { ...st.handoffs, [id]: snap.docs.map((d) => cleanHandoff(d.id, d.data())) };
+      emit();
+    }, failed);
+    bookSubs[id] = [a, b, c1, c2, c3, h];
   }
   function unwatchBook(id, keepData) {
     (bookSubs[id] || []).forEach((u) => { try { u(); } catch (e) {} });
@@ -134,6 +150,7 @@
     if (keepData) return;
     const l = { ...st.loans }; delete l[id]; st.loans = l;
     const c = { ...st.claims }; delete c[id]; st.claims = c;
+    const hh = { ...st.handoffs }; delete hh[id]; st.handoffs = hh;
     ['cards', 'cardReports', 'cardCharges'].forEach((k) => { const x = { ...st[k] }; delete x[id]; st[k] = x; });
   }
   function stopAll() {
@@ -145,7 +162,7 @@
     if (linkUnsub) { try { linkUnsub(); } catch (e) {} linkUnsub = null; } linkCode = ''; st.link = null;
     st.tx = []; st.kb = null; st.txReady = false; st.kbReady = false; st.shifts = []; st.shiftsReady = false;
     Object.keys(bookSubs).concat(Object.keys(retryTimers)).forEach((id) => unwatchBook(id));
-    st.books = []; st.loans = {}; st.claims = {}; st.cards = {}; st.cardReports = {}; st.cardCharges = {}; st.personal = []; st.booksReady = false; st.privateReady = false;
+    st.books = []; st.loans = {}; st.claims = {}; st.handoffs = {}; st.cards = {}; st.cardReports = {}; st.cardCharges = {}; st.personal = []; st.booksReady = false; st.privateReady = false;
   }
   function start() {
     stopAll();
@@ -298,7 +315,7 @@
       const ref = bookRef(id);
       const b = await ref.get();
       if (b.exists && b.data().closing !== true) await ref.update({ closing: true });
-      for (const sub of ['loans', 'claims', 'cards', 'cardReports', 'cardPhotos', 'cardCharges']) {
+      for (const sub of ['loans', 'claims', 'handoffs', 'cards', 'cardReports', 'cardPhotos', 'cardCharges']) {
         const docs = (await ref.collection(sub).get()).docs;
         for (let i = 0; i < docs.length; i += 400) {
           const batch = db.batch();
@@ -350,6 +367,41 @@
       const b = db.batch();
       b.update(bookRef(bookId).collection('loans').doc(claim.loanId), clean({ shares, updatedAt: now() }));
       b.update(bookRef(bookId).collection('claims').doc(claim.id), { status: 'approved', decidedAt: now() });
+      await b.commit();
+    },
+    // ---- 付け替え（借りている人の代わりに、ほかのメンバーが返す）----
+    // 頼む：list = [{ loanId, lender, from, to, amount, note, title }]（借りている人か、貸した人が出す）
+    async askHandoffs(bookId, list) {
+      need();
+      const b = db.batch();
+      list.forEach((x) => b.set(bookRef(bookId).collection('handoffs').doc(), clean({ ...x, by: user.uid, toOk: false, lenderOk: x.lender === user.uid, status: 'pending', newLoanId: '', createdAt: now(), decidedAt: 0 })));
+      await b.commit();
+    },
+    async answerHandoff(bookId, id, ok) {
+      need();
+      await bookRef(bookId).collection('handoffs').doc(id).update(ok ? { toOk: true } : { status: 'declined', decidedAt: now() });
+    },
+    async lenderHandoff(bookId, id, ok) {
+      need();
+      await bookRef(bookId).collection('handoffs').doc(id).update(ok ? { lenderOk: true } : { status: 'rejected', decidedAt: now() });
+    },
+    // 付け替える（貸した人だけ）：元の記録の from の分に「付け替え」を入れ、to への新しい貸しの記録をつくる
+    async applyHandoff(bookId, h, shares, newLoan) {
+      need();
+      const b = db.batch(), loanRef = bookRef(bookId).collection('loans').doc();
+      b.update(bookRef(bookId).collection('loans').doc(h.loanId), clean({ shares, updatedAt: now() }));
+      b.set(loanRef, clean({ ...newLoan, lender: user.uid, createdAt: now(), updatedAt: now() }));
+      b.update(bookRef(bookId).collection('handoffs').doc(h.id), { status: 'done', lenderOk: true, newLoanId: loanRef.id, decidedAt: now() });
+      await b.commit();
+    },
+    async deleteHandoff(bookId, id) { need(); await bookRef(bookId).collection('handoffs').doc(id).delete(); },
+    // 付け替えを取り消す（貸した人だけ）：元の記録から付け替えを外し、新しい貸しの記録と付け替えを消す
+    async undoHandoff(bookId, x) {
+      need();
+      const b = db.batch();
+      if (x.loanId) b.update(bookRef(bookId).collection('loans').doc(x.loanId), clean({ shares: x.shares, updatedAt: now() }));
+      if (x.newLoanId) b.delete(bookRef(bookId).collection('loans').doc(x.newLoanId));
+      if (x.handoffId) b.delete(bookRef(bookId).collection('handoffs').doc(x.handoffId));
       await b.commit();
     },
     async rejectClaim(bookId, claimId) { need(); await bookRef(bookId).collection('claims').doc(claimId).update({ status: 'rejected', decidedAt: now() }); },

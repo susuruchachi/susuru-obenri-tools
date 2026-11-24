@@ -33,6 +33,13 @@
 - **立て替え**：「だれかに払ってあげた？」で払った先（メンバーかお店など）を残せる。例：A が B に払う分を C が B に払った → C が「A に貸した」、払った先は B
 - **肩代わり**（代わりに返した）：「＋ 貸した記録」→「代わりに返した（肩代わり）」。A が B に借りている記録をえらんで金額を入れると、
   B への「返したよ」（A の代わりに）と、C → A の貸しをいっしょに書く。B が「認める」と、A の B への借りが減り（返済に「C が肩代わり」と出る）、A は C に返すことになる。
+- **🔁 付け替え**（ほかの人に返してもらう）：例）A が B に奢ってもらうはずが、B が用意できず、C と D が A に貸した → B が C・D に返す
+  - 借りた人（A）が、自分の借りの「🔁 ほかの人に返してもらう」から、返してもらう人（B）と借り（いくつでも・額も直せる）をえらんで頼む
+  - 貸した人（C）が、記録の「🔁 ほかの人に付け替え」から頼むこともできる（そのときは B が引き受ければ付け替わる）
+  - B が「引き受ける」、貸した人が「いいよ」を押すと（順番はどちらでも）、貸した人の記録で付け替わる：A の分に「🔁 B に付け替え」、C → B の新しい貸し（「A の借りを B が代わりに返す」）
+    （記録を書けるのは貸した人だけなので、貸した人の端末で書く。先に「いいよ」していれば、B が引き受けたときに自動で）
+  - 断ることも、頼んだ人が取り消すこともできる。付け替えたあとも、貸した人が「付け替えを取り消す」で元にもどせる（付け替えたあとの返済が入っていないとき）
+  - 家計簿：B は「A の分を引き受けた」を支出（はじめは割り勘の分類）として、C・D は付け替えでお金が動いていないので入れない
   B が認めるまでは「確認待ち」、断られたら「断られました」と出る（取り消すと、C → A の貸しも消える）
 - **書けるのは貸した本人だけ**。ほかの人は見るだけ（帳簿をつくった人でも、ほかの人の記録は変えられない。Firestore のルールで決めている）
 - 「返済を記録」：分けて返してもらっても、何回でも記録できる。残りを数えて、ぜんぶ返ってきたら「完済」の印
@@ -146,6 +153,8 @@ kashikari_books/{帳簿ID}                 { name, owner, members: [uid], names:
 kashikari_books/{帳簿ID}/loans/{id}      { lender, title, date, memo, mode, total, includeSelf, due, paidTo, paidToName, via, shares: [{ to, amount, repayments: [{ id, date, amount, claim, by }] }] }
                                          （via は肩代わり：{ claimId, loanId, lender: 返した先, for: 代わりに返してあげた人, title }。by は実際に払った人）
 kashikari_books/{帳簿ID}/claims/{id}     { loanId, lender, from, for, coverLoanId, amount, date, note, status: pending|approved|rejected }（for があれば肩代わり）
+kashikari_books/{帳簿ID}/handoffs/{id}   { loanId, lender, from: 借りている人, to: 代わりに返す人, by: 頼んだ人, amount, note, title, toOk, lenderOk, status: pending|done|declined|rejected, newLoanId }
+                                         （付け替えた記録の返済には { handoff, moveTo }、新しい貸しには handoff: { id, loanId, from, title }）
 kashikari_books/{帳簿ID}/cards/{id}       家族のカード { name, holder: 持ち主 }
 kashikari_books/{帳簿ID}/cardReports/{id} 使った報告 { card, by, date, amount, place, memo, hasPhoto, checked }
 kashikari_books/{帳簿ID}/cardPhotos/{報告ID} レシートの写真 { card, by, data: data:image/jpeg;base64,… }（小さくして Firestore に。Storage は使わない）

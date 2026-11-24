@@ -70,6 +70,37 @@ service cloud.firestore {
         allow delete: if (kkMember() && (resource.data.from == request.auth.uid || resource.data.lender == request.auth.uid)) || kkClosingOwner();
       }
 
+      // Handoff: debtor (from) or lender asks another member (to) to repay instead.
+      // to accepts (toOk), lender agrees (lenderOk); then the lender moves the debt (status done).
+      match /handoffs/{handoffId} {
+        allow read: if kkMember();
+        allow create: if kkMember() && kkOpen()
+          && request.resource.data.by == request.auth.uid
+          && request.resource.data.status == 'pending'
+          && request.resource.data.from is string && request.resource.data.to is string
+          && request.resource.data.from != request.resource.data.to
+          && request.resource.data.to != request.resource.data.lender
+          && request.resource.data.from != request.resource.data.lender
+          && request.resource.data.to in kkBook().members
+          && (request.auth.uid == request.resource.data.from || request.auth.uid == request.resource.data.lender)
+          && request.resource.data.lenderOk == (request.auth.uid == request.resource.data.lender)
+          && request.resource.data.toOk == false
+          && get(/databases/$(database)/documents/kashikari_books/$(bookId)/loans/$(request.resource.data.loanId)).data.lender == request.resource.data.lender;
+        allow update: if kkMember() && kkOpen() && resource.data.status == 'pending' && (
+          (request.auth.uid == resource.data.to
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['toOk', 'status', 'decidedAt'])
+            && ((request.resource.data.status == 'pending' && request.resource.data.toOk == true) || request.resource.data.status == 'declined'))
+          || (request.auth.uid == resource.data.lender
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lenderOk', 'status', 'decidedAt', 'newLoanId'])
+            && ((request.resource.data.status == 'pending' && request.resource.data.lenderOk == true)
+              || request.resource.data.status == 'rejected'
+              || (request.resource.data.status == 'done' && resource.data.toOk == true && request.resource.data.lenderOk == true)))
+        );
+        allow delete: if (kkMember() && (resource.data.by == request.auth.uid || resource.data.from == request.auth.uid) && resource.data.status != 'done')
+          || (kkMember() && resource.data.lender == request.auth.uid && resource.data.status != 'pending')
+          || kkClosingOwner();
+      }
+
       match /cards/{cardId} {
         allow read: if kkMember();
         allow create: if kkMember() && kkOpen() && request.resource.data.holder == request.auth.uid;

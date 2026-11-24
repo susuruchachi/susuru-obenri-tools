@@ -352,3 +352,9 @@ img.receipt.big { max-height: none; width: 100%; }
 .lines li.rec-ended .who, .lines li.rec-ended .amt { opacity: .6; }
 .kr-range summary { cursor: pointer; font-size: .8rem; color: var(--parchment-dim); margin-top: 6px; }
 .kr-range .row { margin-top: 6px; flex-wrap: wrap; }
+
+/* 🔁 付け替え */
+.ho-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ho-list li { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--chart-line); border-radius: 10px; }
+.ho-list .check small { display: block; color: var(--parchment-dim); font-size: .74rem; margin-left: 1.6em; }
+.pillbtn:disabled { opacity: .4; }
