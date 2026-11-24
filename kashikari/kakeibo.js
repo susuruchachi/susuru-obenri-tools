@@ -2,6 +2,7 @@
 // 依存: ledger.js（KL）。画面の部品（シート・トースト・保存）は app.js が ctx で渡す
 // データ：kashikari_private/{uid}/tx/{id} = { kind: expense|income|transfer|adjust, date, amount, cat, account, toAccount, dir, title, memo, rec }
 //         kashikari_private/{uid}/kakeibo/settings = { expenseCats, incomeCats, accounts, budget: { total, cats }, recurring }
+// 固定費・定期収入の「いつまで」：endDate（その日までの回だけ）。「パス」：skip に何の分を入れる（入らない・見通しにも入らない）。消した固定費は recurringTrash（もどせる）
 // 固定費・定期収入（毎月・毎年・毎週）は、その日になったら tx/rec_{固定費ID}_{何の分} として自動で入る（2回入れても1つ）。消した分は skip に覚えて入れ直さない
 //   何の分（period）：毎月は YYYY-MM、毎年は YYYY、毎週は その日 YYYY-MM-DD
 // 前借り（定期収入）・後払い（定期の支払い）：shifts/{id}。その分が自動で入るときに、前借り・後払いした額を差し引く（もう入っていれば、その記録の額を直す）
@@ -48,6 +49,8 @@ const Kakeibo = (ctx) => {
       expenseCats: arr(k.expenseCats, DEF.expenseCats), incomeCats: arr(k.incomeCats, DEF.incomeCats), accounts: arr(k.accounts, DEF.accounts),
       budget: { total: (k.budget && +k.budget.total) || 0, cats: (k.budget && k.budget.cats) || {} },
       recurring: Array.isArray(k.recurring) ? k.recurring : [],
+      // 消した固定費（もどせる）：[{ ...固定費, deletedAt }]
+      recurringTrash: Array.isArray(k.recurringTrash) ? k.recurringTrash : [],
       // 貸し借りを家計簿に入れる：{ on, account: いつもの口座, since: この日から, cat: 割り勘の自分の分・立て替えてもらった分の分類, links: { key: { account, off, as, cat } } }
       lend: {
         on: !(k.lend && k.lend.on === false), account: (k.lend && k.lend.account) || arr(k.accounts, DEF.accounts)[0].id,
@@ -127,8 +130,12 @@ const Kakeibo = (ctx) => {
   const parseD = (x) => new Date(+x.slice(0, 4), +x.slice(5, 7) - 1, +x.slice(8, 10));
   const addDays = (x, n) => { const d = parseD(x); d.setDate(d.getDate() + n); return ymdOf(d); };
   // from〜to（日付）の間の回：[{ period, date }]
+  const endOf = (r) => (/^\d{4}-\d{2}-\d{2}$/.test(r.endDate || '') ? r.endDate : '');
+  const isSkip = (r, p) => (r.skip || []).includes(p);
   function occurrences(r, from, to, max) {
-    const out = [], f = freqOf(r), st = startDateOf(r), lim = max || 60;
+    const out = [], f = freqOf(r), st = startDateOf(r), lim = max || 60, end = endOf(r);
+    if (end && to > end) to = end;
+    if (to < from) return out;
     if (f === 'month') {
       // 毎月：はじめた月から（はじめた月は、その日をすぎていてもその月の分から）
       let m = (from > st ? from : st).slice(0, 7);
@@ -152,6 +159,10 @@ const Kakeibo = (ctx) => {
   const freqLabel = (r) => { const f = freqOf(r); return f === 'year' ? `毎年${r.month || 1}/${r.day || 1}` : f === 'week' ? `毎週${WD[(r.wday || 0) % 7]}曜` : `毎月${(r.day || 1) >= 31 ? '末' : (r.day || 1) + '日'}`; };
   const periodLabel = (p) => (/^\d{4}$/.test(p) ? `${p}年分` : /^\d{4}-\d{2}$/.test(p) ? `${+p.slice(0, 4)}年${+p.slice(5, 7)}月分` : /^\d{4}-\d{2}-\d{2}$/.test(p) ? `${md(p)}分` : p);
   const recName = (r) => r.title || catOf(r.kind, r.cat).name;
+  const ymdLabel = (d) => `${+d.slice(0, 4)}/${+d.slice(5, 7)}/${+d.slice(8, 10)}`;
+  // 次の回（パスした回はとばす）
+  const nextOcc = (r) => { const now = today(), to = freqOf(r) === 'year' ? `${+now.slice(0, 4) + 6}-12-31` : addDays(now, 400); return occurrences(r, addDays(now, 1), to, 400).find((o) => !isSkip(r, o.period)) || null; };
+  const recEnded = (r) => { const e = endOf(r); return !!e && e < today(); };
   const recTxId = (r, p) => `rec_${r.id}_${p}`;
   const shiftSum = (rid, p, exceptId) => shifts().filter((x) => x.rec === rid && x.period === p && x.id !== exceptId).reduce((a, x) => a + x.amount, 0);
   const shiftWord = (r) => (r.kind === 'income' ? '前借り' : '後払い');
@@ -462,10 +473,19 @@ const Kakeibo = (ctx) => {
       <h2 class="sec-title"><span class="mark">🔁</span> 固定費・定期の収入<span class="grow"></span><button class="btn small" data-act="kb-rec-edit" data-id="">＋ 足す</button></h2>
       <p class="hint">家賃・スマホ代・サブスク・お小遣い・給料など。毎月・毎年・毎週の、その日になると自動で家計簿に入ります。</p>
       <p class="hint">収入は「前借り」、支払いは「後払い」ができます。何月（何年・何日）の分かをえらぶと、その分が入るときに差し引きます。</p>
-      ${s.recurring.length ? `<ul class="lines">${s.recurring.map((r) => { const c = catOf(r.kind, r.cat); return `<li><div class="who"><button class="btn link" data-act="kb-rec-edit" data-id="${esc(r.id)}">${esc(c.icon)} ${esc(recName(r))}</button>
+      <p class="hint">「いつまで」（日付・回数）や、この回だけ「パス」もできます。パスした回は入らず、見通しにも入りません（もどせます）。</p>
+      ${s.recurring.length ? `<ul class="lines">${s.recurring.slice().sort((a, b) => recEnded(a) - recEnded(b)).map((r) => {
+        const c = catOf(r.kind, r.cat), ended = recEnded(r), nx = ended || r.active === false ? null : nextOcc(r), end = endOf(r);
+        const passN = (r.skip || []).length ? occurrences(r, addDays(today(), 1), freqOf(r) === 'year' ? `${+today().slice(0, 4) + 6}-12-31` : addDays(today(), 800), 400).filter((o) => isSkip(r, o.period)).length : 0;
+        return `<li class="${ended ? 'rec-ended' : ''}"><div class="who"><button class="btn link" data-act="kb-rec-edit" data-id="${esc(r.id)}">${esc(c.icon)} ${esc(recName(r))}</button>
         <small>${esc(freqLabel(r))}・${esc(acctOf(r.account).name)}${(r.moves || []).length ? '・' + r.moves.map((mv) => `→ ${esc(acctOf(mv.account).name)} ${yen(mv.amount)}`).join('、') : ''}${r.active === false ? '・お休み中' : ''}</small>
-        <button class="btn small" data-act="kb-shift-new" data-id="${esc(r.id)}">${r.kind === 'income' ? '💴 前借り' : '🕒 後払い'}</button></div>
-        <div class="amt ${r.kind === 'income' ? 'in' : 'out'}">${r.kind === 'income' ? '+' : '−'}${yen(r.amount)}</div></li>`; }).join('')}</ul>` : ''}
+        <small>${ended ? `<span class="tag soft">おわった（${esc(ymdLabel(end))}まで）</span>` : `${nx ? `次は ${esc(md(nx.date))}` : r.active === false ? '' : 'この先の回はありません'}${end ? `・<span class="tag part">${esc(ymdLabel(end))}まで</span>` : ''}${passN ? `・<span class="tag soft">パス ${passN}回</span>` : ''}`}</small>
+        ${ended ? '' : `<button class="btn small" data-act="kb-shift-new" data-id="${esc(r.id)}">${r.kind === 'income' ? '💴 前借り' : '🕒 後払い'}</button>`}</div>
+        <div class="amt ${ended ? '' : r.kind === 'income' ? 'in' : 'out'}">${r.kind === 'income' ? '+' : '−'}${yen(r.amount)}</div></li>`; }).join('')}</ul>` : ''}
+      ${s.recurringTrash.length ? `<button class="btn link" data-act="kb-rtrash">🗑 消した固定費（${s.recurringTrash.length}件・もどせます）</button>
+        ${KB.rtrash ? `<ul class="lines">${s.recurringTrash.slice().sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0)).map((r) => `<li><div class="who">${esc(catOf(r.kind, r.cat).icon)} ${esc(recName(r))}<small>${esc(freqLabel(r))}・${r.deletedAt ? esc(new Date(r.deletedAt).toLocaleDateString('ja-JP')) + 'に消した' : ''}</small>
+          <div class="row"><button class="btn small" data-act="kb-rec-restore" data-id="${esc(r.id)}">もどす</button>${KB.rpurge === r.id ? `<span class="confirm"><span>もう、もどせなくなります</span><button class="btn small danger" data-act="kb-rec-purge-yes" data-id="${esc(r.id)}">完全に消す</button><button class="btn small" data-act="kb-rec-purge" data-id="">やめる</button></span>` : `<button class="btn small danger" data-act="kb-rec-purge" data-id="${esc(r.id)}">完全に消す</button>`}</div></div>
+          <div class="amt">${r.kind === 'income' ? '+' : '−'}${yen(r.amount)}</div></li>`).join('')}</ul>` : ''}` : ''}
     </section>
     ${linkBlock()}
     <section class="sec">
@@ -617,9 +637,15 @@ const Kakeibo = (ctx) => {
         <fieldset><legend>分類</legend>${chips(X.kind === 'income' ? s.incomeCats : s.expenseCats, 'kb-pick-cat', X.cat)}</fieldset>
         <fieldset><legend>${X.kind === 'income' ? 'どこに入る？' : 'どこから払う？'}</legend>${chips(s.accounts, 'kb-pick-acct', X.account)}</fieldset>
         ${X.kind === 'income' ? movesField(X).replace('そのうち、ほかの口座に移した？（PayPay など・なくてもOK）', '入ったら毎回、ほかの口座に移す？（PayPay など・なくてもOK）') : ''}
+        <fieldset><legend>いつまで？</legend><div><div class="seg">${[['none', 'ずっと'], ['date', '日付まで'], ['count', '回数で']].map(([v, t]) => `<button type="button" data-act="kb-rend" data-v="${v}" aria-pressed="${X.endMode === v}">${t}</button>`).join('')}</div></div>
+          ${X.endMode === 'date' ? `<div class="field"><label for="kr-enddate">この日までの回で終わり</label><input id="kr-enddate" type="date" class="plain-input due-input" data-bind="sheet.endDate" value="${esc(X.endDate)}"></div>` : ''}
+          ${X.endMode === 'count' ? `<div class="field"><label for="kr-endcount">これから何回？（今日から。パスした回は数えない）</label><input id="kr-endcount" class="plain-input" inputmode="numeric" data-bind="sheet.endCount" value="${esc(X.endCount)}" style="max-width:5em"></div>` : ''}
+          <p class="hint" id="kr-endnote">${recEndNote(X)}</p></fieldset>
+        <fieldset><legend>パスする回（押すとパス・もう一度押すともどす）</legend><div id="kr-occ">${recOccHtml(X)}</div>
+          <details class="kr-range"><summary>期間でまとめてパス</summary><div class="row"><input id="kr-pfrom" type="date" class="plain-input due-input" data-bind="sheet.passFrom" value="${esc(X.passFrom)}" aria-label="パスするはじめの日"><span>〜</span><input id="kr-pto" type="date" class="plain-input due-input" data-bind="sheet.passTo" value="${esc(X.passTo)}" aria-label="パスする最後の日"><button type="button" class="btn small" data-act="kb-rpass-range">パスする</button></div></details></fieldset>
         <label class="check"><input type="checkbox" id="kr-active" data-bind="sheet.active" ${X.active ? 'checked' : ''}> 自動で入れる（外すとお休み）</label>
         <p class="hint">${X.id ? '' : X.freq === 'month' ? `${ymLabel(curYM())}から入ります（その日をすぎていれば、すぐに入ります）。` : '今日から入ります。'}</p>
-        ${X.id ? delRow(X, 'この固定費を消しますか？（もう入った記録は残ります）') : ''}${ctx.foot('保存する')}`;
+        ${X.id ? delRow(X, 'この固定費を消しますか？（もう入った記録は残ります。消した固定費は、あとでもどせます）') : ''}${ctx.foot('保存する')}`;
     }
     return '';
   }
@@ -628,6 +654,11 @@ const Kakeibo = (ctx) => {
     const pv = document.getElementById('sf-preview');
     if (X && pv && X.sheetKind === 'kb-shift') { const r = settings().recurring.find((y) => y.id === X.rec); if (r) pv.innerHTML = shiftPreview(X, r); }
     if (X && X.kind && el) el.textContent = hasOp(X.amount) ? `＝ ${yen(calc(X.amount))}` : '';
+    if (X && X.sheetKind === 'kb-rec') {
+      const occ = document.getElementById('kr-occ'), note = document.getElementById('kr-endnote');
+      if (occ) { const h = recOccHtml(X); if (occ.innerHTML !== h) occ.innerHTML = h; }
+      if (note) note.innerHTML = recEndNote(X);
+    }
     if (X && X.sheetKind === 'kb-event' && el) el.textContent = hasOp(X.budget) ? `＝ ${yen(calc(X.budget))}` : '';
     if (X && (X.sheetKind === 'kb-wish' || X.sheetKind === 'kb-wsave') && el) { const v = X.sheetKind === 'kb-wish' ? X.price : X.saved; el.textContent = hasOp(v) ? `＝ ${yen(calc(v))}` : ''; }
   }
@@ -716,10 +747,16 @@ const Kakeibo = (ctx) => {
       if (X.freq !== 'week' && !day) return ctx.sheetErr('何日かを入れてください（1〜31）');
       if (X.freq === 'year' && !month) return ctx.sheetErr('何月かを入れてください（1〜12）');
       const prev = s.recurring.find((r) => r.id === X.id);
+      if (X.endMode === 'date' && !/^\d{4}-\d{2}-\d{2}$/.test(X.endDate || '')) return ctx.sheetErr('いつまでかの日付を入れてください');
+      if (X.endMode === 'count' && !(parseInt(String(X.endCount).replace(/\D/g, ''), 10) > 0)) return ctx.sheetErr('これから何回かを入れてください');
+      const endDate = recEndDate(X);
+      if (X.endMode === 'count' && !endDate) return ctx.sheetErr('その回数の日が見つかりませんでした');
       const r = { id: X.id || 'r' + rid(), kind: X.kind, title: X.title.trim(), amount, freq: X.freq, day: day || 1, month: month || 1, wday: +X.wday || 0, cat: X.cat, account: X.account, active: !!X.active,
-        start: prev ? prev.start : curYM(), startDate: prev ? prev.startDate || '' : today(), skip: prev ? prev.skip || [] : [],
+        start: prev ? prev.start : curYM(), startDate: prev ? prev.startDate || '' : today(), skip: [...new Set(X.skip || [])], endDate,
         moves: X.kind === 'income' ? (X.moves || []).filter((mv) => mv.account && mv.account !== X.account && calc(mv.amount) > 0).map((mv) => ({ account: mv.account, amount: calc(mv.amount) })) : [] };
       if (r.moves.reduce((a, mv) => a + mv.amount, 0) > amount) return ctx.sheetErr('移す額が、収入より多いです');
+      // もどした回（パスをやめた回）は、もう一度自動で入れられるように
+      (prev ? prev.skip || [] : []).filter((p) => !r.skip.includes(p)).forEach((p) => asked.delete(recTxId(r, p)));
       saveSettings({ ...s, recurring: X.id ? s.recurring.map((x) => (x.id === X.id ? r : x)) : [...s.recurring, r] }, '✓ 固定費を保存しました');
       ctx.closeSheet(); setTimeout(fillRecurring, 300); return;
     }
@@ -744,7 +781,11 @@ const Kakeibo = (ctx) => {
       run(KStore.deleteTx(X.id), '記録を消しました');
     } else if (sk === 'kb-acct') saveSettings({ ...s, accounts: s.accounts.filter((a) => a.id !== X.id) }, '口座を消しました');
     else if (sk === 'kb-cat') { const key = X.kind === 'income' ? 'incomeCats' : 'expenseCats'; saveSettings({ ...s, [key]: s[key].filter((c) => c.id !== X.id) }, '分類を消しました'); }
-    else if (sk === 'kb-rec') saveSettings({ ...s, recurring: s.recurring.filter((r) => r.id !== X.id) }, '固定費を消しました');
+    else if (sk === 'kb-rec') {
+      const r = s.recurring.find((x) => x.id === X.id);
+      saveSettings({ ...s, recurring: s.recurring.filter((x) => x.id !== X.id), recurringTrash: r ? [{ ...r, deletedAt: Date.now() }, ...s.recurringTrash.filter((x) => x.id !== r.id)].slice(0, 30) : s.recurringTrash },
+        '固定費を消しました（⚙️ 設定の「消した固定費」からもどせます）');
+    }
     else if (sk === 'kb-shift') { const x = shifts().find((y) => y.id === X.id); if (x) deleteShift(x); }
     else if (sk === 'kb-event') saveSettings({ ...s, events: s.events.filter((e) => e.id !== X.id) }, '予定を消しました');
     else if (sk === 'kb-wish') saveSettings({ ...s, wishes: s.wishes.filter((w) => w.id !== X.id) }, 'ほしい物を消しました（家計簿の記録は残ります）');
@@ -807,12 +848,35 @@ const Kakeibo = (ctx) => {
       case 'kb-budget': { const cats = {}; Object.entries(s.budget.cats).forEach(([k, v]) => { cats[k] = String(v); }); ctx.openSheet('kb-budget', { total: s.budget.total ? String(s.budget.total) : '', cats }); return 'done'; }
       case 'kb-rec-edit': {
         const r = s.recurring.find((x) => x.id === d.id);
+        const more = { endMode: r && endOf(r) ? 'date' : 'none', endDate: r ? endOf(r) : '', endCount: '', skip: r ? [...(r.skip || [])] : [], skip0: r ? [...(r.skip || [])] : [], passFrom: '', passTo: '', occAll: false };
         ctx.openSheet('kb-rec', r ? { id: r.id, kind: r.kind, title: r.title, amount: String(r.amount), freq: freqOf(r), day: String(r.day || 1), month: String(r.month || 1), wday: String(r.wday || 0), cat: r.cat, account: r.account, active: r.active !== false, del: false,
-            moves: (r.moves || []).map((mv) => ({ account: mv.account, amount: String(mv.amount) })) }
-          : { id: null, moves: [], kind: 'expense', title: '', amount: '', freq: 'month', day: '1', month: String(new Date().getMonth() + 1), wday: String(new Date().getDay()), cat: s.expenseCats[0].id, account: s.accounts[0].id, active: true, del: false });
+            moves: (r.moves || []).map((mv) => ({ account: mv.account, amount: String(mv.amount) })), ...more }
+          : { id: null, moves: [], kind: 'expense', title: '', amount: '', freq: 'month', day: '1', month: String(new Date().getMonth() + 1), wday: String(new Date().getDay()), cat: s.expenseCats[0].id, account: s.accounts[0].id, active: true, del: false, ...more });
         return 'done';
       }
       case 'kb-csv': exportCsv(d.v); return 'done';
+      case 'kb-rend': if (X) { X.endMode = d.v; ctx.drawSheet(); } return 'done';
+      case 'kb-rskip': if (X) { X.skip = (X.skip || []).includes(d.v) ? X.skip.filter((p) => p !== d.v) : [...(X.skip || []), d.v]; ctx.drawSheet(); } return 'done';
+      case 'kb-rocc-all': if (X) { X.occAll = true; ctx.drawSheet(); } return 'done';
+      case 'kb-rpass-range': {
+        if (!X) return 'done';
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(X.passFrom || '') || !/^\d{4}-\d{2}-\d{2}$/.test(X.passTo || '')) { ctx.sheetErr('パスする期間（はじめと最後の日）を入れてください'); return 'done'; }
+        const r = recDraft(X), from = X.passFrom > today() ? X.passFrom : addDays(today(), 1);
+        const ps = occurrences(r, from, X.passTo, 400).map((o) => o.period).filter((p) => !shiftSum(r.id, p));
+        if (!ps.length) { ctx.sheetErr('その期間に、パスできる回はありません（今日より後の回だけパスできます）'); return 'done'; }
+        X.skip = [...new Set([...(X.skip || []), ...ps])]; X.err = ''; X.passFrom = ''; X.passTo = '';
+        toast(`${ps.length}回をパスにしました（保存すると決まります）`); ctx.drawSheet(); return 'done';
+      }
+      case 'kb-rtrash': KB.rtrash = !KB.rtrash; return 'render';
+      case 'kb-rec-restore': {
+        const r = s.recurringTrash.find((x) => x.id === d.id);
+        if (!r) return 'done';
+        const back = { ...r }; delete back.deletedAt;
+        saveSettings({ ...s, recurring: [...s.recurring.filter((x) => x.id !== r.id), back], recurringTrash: s.recurringTrash.filter((x) => x.id !== r.id) }, `✓ 「${recName(r)}」をもどしました`);
+        setTimeout(fillRecurring, 300); return 'render';
+      }
+      case 'kb-rec-purge': KB.rpurge = d.id; return 'render';
+      case 'kb-rec-purge-yes': KB.rpurge = ''; saveSettings({ ...s, recurringTrash: s.recurringTrash.filter((x) => x.id !== d.id) }, '完全に消しました'); return 'render';
       case 'kb-wish-edit': openWish(d.id); return 'done';
       case 'kb-wish-prio': if (X) { X.prio = +d.v; ctx.drawSheet(); } return 'done';
       case 'kb-wish-cat': if (X) { X.cat = X.cat === d.v ? '' : d.v; ctx.drawSheet(); } return 'done';
@@ -836,6 +900,54 @@ const Kakeibo = (ctx) => {
       case 'kb-wish-done': KB.wishDone = KB.wishDone === d.v ? '' : d.v; return 'render';
       default: return '';
     }
+  }
+
+  // ---------- 固定費の「いつまで」「パス」（シートの中）----------
+  // 入力中の内容から、固定費の形をつくる（いつまで は入れない）
+  function recDraft(X) {
+    const prev = settings().recurring.find((r) => r.id === X.id);
+    return { id: X.id || '_new', kind: X.kind, freq: X.freq, day: Math.min(31, Math.max(1, parseInt(String(X.day).replace(/\D/g, ''), 10) || 1)), month: Math.min(12, Math.max(1, parseInt(String(X.month).replace(/\D/g, ''), 10) || 1)), wday: +X.wday || 0,
+      start: prev ? prev.start : curYM(), startDate: prev ? prev.startDate || '' : today(), skip: X.skip || [], amount: calc(X.amount) };
+  }
+  // いつまで（日付）を決める。回数のときは、今日から数えて（もう入った回・パスした回は数えない）その回の日
+  function recEndDate(X) {
+    if (X.endMode === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(X.endDate || '') ? X.endDate : '';
+    if (X.endMode !== 'count') return '';
+    const n = parseInt(String(X.endCount).replace(/\D/g, ''), 10);
+    if (!(n > 0)) return '';
+    const r = recDraft(X), now = today(), have = new Set(txs().map((t) => t.id));
+    const list = occurrences(r, now, freqOf(r) === 'year' ? `${+now.slice(0, 4) + 60}-12-31` : addDays(now, freqOf(r) === 'week' ? 7 * (n + 60) : 31 * (n + 30)), n + 400)
+      .filter((o) => !isSkip(r, o.period) && !have.has(recTxId(r, o.period)));
+    return list[n - 1] ? list[n - 1].date : '';
+  }
+  function recEndNote(X) {
+    if (X.endMode === 'none') return 'ずっと続きます。';
+    const e = recEndDate(X);
+    if (!e) return X.endMode === 'count' ? '何回かを入れると、終わる日が出ます。' : '終わりの日を入れてください。';
+    const r = { ...recDraft(X), endDate: e }, now = today();
+    const left = occurrences(r, now, e, 400).filter((o) => !isSkip(r, o.period) && !txs().some((t) => t.id === recTxId(r, o.period))).length;
+    return e < now ? `${esc(ymdLabel(e))}で終わりました（もう入りません。「ずっと」にするともどります）。` : `${esc(ymdLabel(e))}の回まで（これから ${left}回・${yen(left * (r.amount || 0))}）。`;
+  }
+  // これからの回（押すとパス）と、パスした回（もどせる）
+  function recOccHtml(X) {
+    const r = { ...recDraft(X), endDate: recEndDate(X) }, now = today();
+    const upto = freqOf(r) === 'year' ? `${+now.slice(0, 4) + 6}-12-31` : addDays(now, freqOf(r) === 'week' ? 7 * 40 : 31 * 30);
+    const fut = occurrences(r, addDays(now, 1), upto, 400);
+    // ふだんは近い回だけ。パスした回があれば、そこまで出す
+    const lastSk = fut.reduce((m, o, i) => ((X.skip || []).includes(o.period) ? i : m), -1);
+    const show = fut.slice(0, X.occAll ? 400 : Math.max(freqOf(r) === 'year' ? 4 : 8, lastSk + 2));
+    const chip = (o) => {
+      const sk = (X.skip || []).includes(o.period), sh = X.id ? shiftSum(X.id, o.period) : 0;
+      return sh ? `<button type="button" class="pillbtn" disabled title="前借り・後払いがある回はパスできません">${esc(md(o.date))}・${esc(periodLabel(o.period))}（${r.kind === 'income' ? '前借り' : '後払い'}あり）</button>`
+        : `<button type="button" class="pillbtn occ ${sk ? 'skipped' : ''}" data-act="kb-rskip" data-v="${esc(o.period)}" aria-pressed="${sk}">${sk ? 'パス：' : ''}${esc(md(o.date))}・${esc(periodLabel(o.period))}</button>`;
+    };
+    const futP = new Set(fut.map((o) => o.period));
+    // 前の回で消した（パスにした）分・ずっと先の分：もどせるように出す
+    const other = [...new Set([...(X.skip0 || []), ...(X.skip || [])])].filter((p) => !futP.has(p));
+    return `${show.length ? `<div class="filters">${show.map(chip).join('')}</div>` : `<p class="hint">${r.endDate && r.endDate <= now ? 'もう終わったので、この先の回はありません。' : 'この先の回はありません。'}</p>`}
+      ${fut.length > show.length ? `<button type="button" class="btn link" data-act="kb-rocc-all">もっと先も見る（${fut.length}回）</button>` : ''}
+      ${other.length ? `<p class="hint">パスしている前の回（家計簿から消した回など）：押すともどして、家計簿に入れ直します</p><div class="filters">${other.sort().map((p) => { const sk = (X.skip || []).includes(p); return `<button type="button" class="pillbtn occ ${sk ? 'skipped' : ''}" data-act="kb-rskip" data-v="${esc(p)}" aria-pressed="${sk}">${sk ? 'パス：' : 'もどす：'}${esc(periodLabel(p))}</button>`; }).join('')}</div>` : ''}
+      ${(X.skip || []).length ? `<p class="hint">パス ${(X.skip || []).length}回。パスした回は入らず、見通し・航海日誌にも出ません。</p>` : ''}`;
   }
 
   // ---------- 固定費を自動で入れる ----------
@@ -936,12 +1048,12 @@ const Kakeibo = (ctx) => {
     const now = today(), f = freqOf(r);
     if (kind === 'advance') {
       const to = f === 'week' ? addDays(now, 70) : f === 'year' ? `${+now.slice(0, 4) + 3}-12-31` : `${addMonth(now.slice(0, 7), 12)}-28`;
-      return occurrences(r, now, to, 60).filter((o) => !txs().some((t) => t.id === recTxId(r, o.period))).slice(0, f === 'year' ? 3 : f === 'week' ? 10 : 12);
+      return occurrences(r, now, to, 60).filter((o) => !isSkip(r, o.period) && !txs().some((t) => t.id === recTxId(r, o.period))).slice(0, f === 'year' ? 3 : f === 'week' ? 10 : 12);
     }
     const from = f === 'week' ? addDays(now, -42) : f === 'year' ? `${+now.slice(0, 4) - 1}-01-01` : `${addMonth(now.slice(0, 7), -3)}-01`;
     const to = f === 'week' ? addDays(now, 14) : f === 'year' ? `${+now.slice(0, 4)}-12-31` : `${addMonth(now.slice(0, 7), 1)}-28`;
     // もう来た分（新しい順）を先に、そのあとにこれから来る分
-    const all = occurrences(r, from, to, 60);
+    const all = occurrences(r, from, to, 60).filter((o) => !isSkip(r, o.period) || shiftSum(r.id, o.period));
     return all.filter((o) => o.date <= now).reverse().concat(all.filter((o) => o.date > now));
   }
   function openShift(recId, x) {
@@ -1126,6 +1238,7 @@ const Kakeibo = (ctx) => {
     s.recurring.forEach((r) => {
       if (r.active === false || !r.amount) return;
       occurrences(r, from, to, 400).forEach(({ period, date }) => {
+        if (isSkip(r, period)) return;
         const a = Math.max(0, r.amount - shiftSum(r.id, period));
         out.push({ id: `r_${r.id}_${period}`, date, kind: r.kind, amount: a, title: `${r.kind === 'income' ? '💴' : '💸'} ${recName(r)} ${r.kind === 'income' ? '+' : '−'}${yen(a)}`,
           note: `${freqLabel(r)}・${periodLabel(period)}${a !== r.amount ? `（前借り・後払い ${yen(r.amount - a)} を差し引き）` : ''}` });
