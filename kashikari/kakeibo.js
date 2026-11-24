@@ -2,7 +2,10 @@
 // 依存: ledger.js（KL）。画面の部品（シート・トースト・保存）は app.js が ctx で渡す
 // データ：kashikari_private/{uid}/tx/{id} = { kind: expense|income|transfer|adjust, date, amount, cat, account, toAccount, dir, title, memo, rec }
 //         kashikari_private/{uid}/kakeibo/settings = { expenseCats, incomeCats, accounts, budget: { total, cats }, recurring }
-// 固定費（毎月）は、その月のその日になったら tx/rec_{固定費ID}_{年-月} として自動で入る（2回入れても1つ）。消した月は skip に覚えて入れ直さない
+// 固定費・定期収入（毎月・毎年・毎週）は、その日になったら tx/rec_{固定費ID}_{何の分} として自動で入る（2回入れても1つ）。消した分は skip に覚えて入れ直さない
+//   何の分（period）：毎月は YYYY-MM、毎年は YYYY、毎週は その日 YYYY-MM-DD
+// 前借り（定期収入）・後払い（定期の支払い）：shifts/{id}。その分が自動で入るときに、前借り・後払いした額を差し引く（もう入っていれば、その記録の額を直す）
+//   前借り：前借りした日に収入として入れる。後払い：「まだ払っていない」に出し、「払った」でその日の支出として入れる
 const Kakeibo = (ctx) => {
   const { esc, yen, today, toast, run } = ctx;
   const pad = (n) => String(n).padStart(2, '0');
@@ -54,6 +57,52 @@ const Kakeibo = (ctx) => {
   };
   const acctOf = (id) => settings().accounts.find((a) => a.id === id) || { id, name: '（消した口座）', icon: '❔', initial: 0 };
   const txs = () => ctx.S().tx || [];
+  const shifts = () => ctx.S().shifts || [];
+
+  // ---- 固定費の繰り返し（毎月・毎年・毎週）と「何の分」----
+  const WD = '日月火水木金土';
+  const freqOf = (r) => (r.freq === 'year' || r.freq === 'week' ? r.freq : 'month');
+  const startDateOf = (r) => (/^\d{4}-\d{2}-\d{2}$/.test(r.startDate || '') ? r.startDate : `${/^\d{4}-\d{2}$/.test(r.start || '') ? r.start : curYM()}-01`);
+  const ymdOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const parseD = (x) => new Date(+x.slice(0, 4), +x.slice(5, 7) - 1, +x.slice(8, 10));
+  const addDays = (x, n) => { const d = parseD(x); d.setDate(d.getDate() + n); return ymdOf(d); };
+  // from〜to（日付）の間の回：[{ period, date }]
+  function occurrences(r, from, to, max) {
+    const out = [], f = freqOf(r), st = startDateOf(r), lim = max || 60;
+    if (f === 'month') {
+      // 毎月：はじめた月から（はじめた月は、その日をすぎていてもその月の分から）
+      let m = (from > st ? from : st).slice(0, 7);
+      for (let n = 0; m <= to.slice(0, 7) && n < lim; m = addMonth(m, 1), n++) {
+        const date = `${m}-${pad(Math.min(r.day || 1, daysIn(m)))}`;
+        if (date >= from && date <= to) out.push({ period: m, date });
+      }
+    } else if (f === 'year') {
+      const mo = Math.min(12, Math.max(1, r.month || 1));
+      for (let y = Math.max(+from.slice(0, 4), +st.slice(0, 4)), n = 0; y <= +to.slice(0, 4) && n < lim; y++, n++) {
+        const date = `${y}-${pad(mo)}-${pad(Math.min(r.day || 1, daysIn(`${y}-${pad(mo)}`)))}`;
+        if (date >= from && date <= to && date >= st) out.push({ period: String(y), date });
+      }
+    } else {
+      let d = parseD(from > st ? from : st);
+      while (d.getDay() !== ((r.wday || 0) % 7)) d.setDate(d.getDate() + 1);
+      for (let n = 0; ymdOf(d) <= to && n < lim; n++, d.setDate(d.getDate() + 7)) out.push({ period: ymdOf(d), date: ymdOf(d) });
+    }
+    return out;
+  }
+  const freqLabel = (r) => { const f = freqOf(r); return f === 'year' ? `毎年${r.month || 1}/${r.day || 1}` : f === 'week' ? `毎週${WD[(r.wday || 0) % 7]}曜` : `毎月${(r.day || 1) >= 31 ? '末' : (r.day || 1) + '日'}`; };
+  const periodLabel = (p) => (/^\d{4}$/.test(p) ? `${p}年分` : /^\d{4}-\d{2}$/.test(p) ? `${+p.slice(0, 4)}年${+p.slice(5, 7)}月分` : /^\d{4}-\d{2}-\d{2}$/.test(p) ? `${md(p)}分` : p);
+  const recName = (r) => r.title || catOf(r.kind, r.cat).name;
+  const recTxId = (r, p) => `rec_${r.id}_${p}`;
+  const shiftSum = (rid, p, exceptId) => shifts().filter((x) => x.rec === rid && x.period === p && x.id !== exceptId).reduce((a, x) => a + x.amount, 0);
+  const shiftWord = (r) => (r.kind === 'income' ? '前借り' : '後払い');
+  // その分がもう自動で入っていたら、前借り・後払いの合計（sum）に合わせて額を直す
+  function recTxOps(r, p, sum) {
+    const t = txs().find((x) => x.id === recTxId(r, p));
+    if (!t) return [];
+    const base = t.base || r.amount, body = { ...t, amount: Math.max(0, base - sum), base, shifted: sum };
+    delete body.id;
+    return [{ op: 'set', col: 'tx', id: t.id, body }];
+  }
 
   // 口座に効く額（出ていく：マイナス、入る：プラス）
   function effect(t, acct) {
@@ -104,7 +153,7 @@ const Kakeibo = (ctx) => {
         <div class="bal"><span class="label">収支</span><span class="num" style="color:${sum.inc - sum.exp >= 0 ? 'var(--signal)' : 'var(--danger-text)'}">${sum.inc - sum.exp < 0 ? '−' : ''}${yen(Math.abs(sum.inc - sum.exp))}</span></div>
       </div>
       ${budgetBlock(m, sum)}
-    </section>`;
+    </section>${shiftBlock()}`;
     // 分類ごと
     const cats = Object.entries(sum.byCat).sort((a, b) => b[1] - a[1]);
     if (cats.length) {
@@ -138,6 +187,27 @@ const Kakeibo = (ctx) => {
     return h;
   }
 
+  // 前借り・後払い：まだ払っていない後払いと、これから入る分の前借り
+  function shiftBlock() {
+    const s = settings(), now = today();
+    const items = shifts().map((x) => ({ x, r: s.recurring.find((r) => r.id === x.rec) })).filter(({ x, r }) => r && (x.kind === 'defer' ? !x.paid : !txs().some((t) => t.id === recTxId(r, x.period))));
+    if (!items.length) return '';
+    items.sort((a, b) => (a.x.kind === b.x.kind ? (a.x.date || '9').localeCompare(b.x.date || '9') : a.x.kind === 'defer' ? -1 : 1));
+    return `<section class="sec"><h3 class="sec-title"><span class="mark">🔁</span> 前借り・後払い</h3><ul class="lines">${items.map(({ x, r }) => {
+      const c = catOf(r.kind, r.cat), lbl = periodLabel(x.period);
+      if (x.kind === 'defer') {
+        const n = x.date ? Math.round((parseD(x.date) - parseD(now)) / 86400000) : null;
+        const due = x.date ? `<span class="tag ${n < 0 ? 'due' : n <= 3 ? 'part' : 'soft'}">⏰ ${esc(md(x.date))}・${n < 0 ? `すぎ（${-n}日）` : n === 0 ? '今日' : `あと${n}日`}</span>` : '';
+        return `<li><div class="who">${esc(c.icon)} ${esc(recName(r))}（${esc(lbl)}）<small>後払い・まだ払っていない</small>${due}</div>
+          <div class="amt out">${yen(x.amount)}<br><button class="btn small" data-act="kb-shift-edit" data-id="${esc(x.id)}">払った</button></div></li>`;
+      }
+      const left = Math.max(0, r.amount - shiftSum(r.id, x.period));
+      return `<li><div class="who">${esc(c.icon)} ${esc(recName(r))}（${esc(lbl)}）から前借り<small>${esc(lbl)}は ${yen(left)} になります${x.date ? '・' + esc(md(x.date)) + 'に前借り' : ''}</small></div>
+        <div class="amt in">${yen(x.amount)}<br><button class="btn small" data-act="kb-shift-edit" data-id="${esc(x.id)}">見る</button></div></li>`;
+    }).join('')}</ul></section>`;
+  }
+  const unpaidDefers = () => { const s = settings(); return shifts().filter((x) => x.kind === 'defer' && !x.paid && s.recurring.some((r) => r.id === x.rec)); };
+
   function budgetBlock(m, sum) {
     const total = settings().budget.total;
     if (!total) return `<p class="hint">予算を決めると、あといくら使えるかが出ます（⚙️ 設定 → 予算）</p>`;
@@ -161,7 +231,7 @@ const Kakeibo = (ctx) => {
       sub = `${t.title ? c.name + '・' : ''}${acctOf(t.account).name}`;
     }
     return `<li><button data-act="kb-edit" data-id="${esc(t.id)}"><span class="kb-ic">${esc(icon)}</span>
-      <span class="kb-tx"><span class="kb-tx-name">${esc(name)}${t.rec ? ' <small class="tag part">固定費</small>' : ''}</span><small>${esc(sub)}${t.memo ? '・' + esc(t.memo) : ''}</small></span>
+      <span class="kb-tx"><span class="kb-tx-name">${esc(name)}${t.rec ? ' <small class="tag part">固定費</small>' : ''}${t.shift ? ` <small class="tag soft">${t.kind === 'income' ? '前借り' : '後払い'}</small>` : ''}</span><small>${esc(sub)}${t.rec && t.shifted ? `・${t.kind === 'income' ? '前借り' : '後払い'} ${yen(t.shifted)} を差し引き` : ''}${t.memo ? '・' + esc(t.memo) : ''}</small></span>
       <span class="amt ${cls}">${amt}</span></button></li>`;
   }
   function dayList(list, withYear) {
@@ -185,6 +255,7 @@ const Kakeibo = (ctx) => {
     let lent = 0, borrowed = 0;
     KL.personalNets(S.personal).forEach((x) => { lent += x.lent; borrowed += x.borrowed; });
     S.books.forEach((b) => KL.myNets(b, S.loans[b.id] || [], S.user.uid).forEach((x) => { lent += x.lent; borrowed += x.borrowed; }));
+    const unpaid = unpaidDefers().reduce((a, x) => a + x.amount, 0);
     return `<section class="sec">
       <h2 class="sec-title"><span class="mark">👛</span> 口座<span class="grow"></span><button class="btn small" data-act="kb-new" data-v="transfer">🔁 振替</button><button class="btn primary small" data-act="kb-acct-new">＋ 口座</button></h2>
       <ul class="kb-accts">${s.accounts.map((a) => { const v = balance(a); return `<li>
@@ -194,7 +265,8 @@ const Kakeibo = (ctx) => {
         <li><div class="who">口座の合計</div><div class="amt">${total < 0 ? '−' : ''}${yen(Math.abs(total))}</div></li>
         <li><div class="who">＋ 貸している（返ってくる予定）<small>みんなの帳簿と、自分だけの帳簿の貸し借り</small></div><div class="amt in">${yen(lent)}</div></li>
         <li><div class="who">− 借りている（返す予定）</div><div class="amt out">${yen(borrowed)}</div></li>
-        <li><div class="who"><b>ぜんぶ合わせると</b></div><div class="amt" style="color:var(--brass-bright)">${total + lent - borrowed < 0 ? '−' : ''}${yen(Math.abs(total + lent - borrowed))}</div></li>
+        ${unpaid ? `<li><div class="who">− まだ払っていない後払い</div><div class="amt out">${yen(unpaid)}</div></li>` : ''}
+        <li><div class="who"><b>ぜんぶ合わせると</b></div><div class="amt" style="color:var(--brass-bright)">${total + lent - borrowed - unpaid < 0 ? '−' : ''}${yen(Math.abs(total + lent - borrowed - unpaid))}</div></li>
       </ul>
       <p class="hint">口座の残高が合わないときは、口座の通帳で「残高を合わせる」を押すと、ほんとうの残高に直せます。</p>
     </section>`;
@@ -265,10 +337,13 @@ const Kakeibo = (ctx) => {
       <p class="hint">${s.budget.total ? `ぜんぶで ${yen(s.budget.total)}` : 'まだ決めていません'}${Object.keys(s.budget.cats).filter((k) => +s.budget.cats[k]).length ? `・分類ごと：${Object.entries(s.budget.cats).filter(([, v]) => +v).map(([k, v]) => `${esc(catOf('expense', k).name)} ${yen(+v)}`).join('、')}` : ''}</p>
     </section>
     <section class="sec">
-      <h2 class="sec-title"><span class="mark">🔁</span> 固定費・毎月の収入<span class="grow"></span><button class="btn small" data-act="kb-rec-edit" data-id="">＋ 足す</button></h2>
-      <p class="hint">家賃・スマホ代・サブスク・お小遣いなど。毎月その日になると、自動で家計簿に入ります。</p>
-      ${s.recurring.length ? `<ul class="lines">${s.recurring.map((r) => { const c = catOf(r.kind, r.cat); return `<li><div class="who"><button class="btn link" data-act="kb-rec-edit" data-id="${esc(r.id)}">${esc(c.icon)} ${esc(r.title || c.name)}</button>
-        <small>毎月${r.day >= 31 ? '末' : r.day + '日'}・${esc(acctOf(r.account).name)}${r.active === false ? '・お休み中' : ''}</small></div><div class="amt ${r.kind === 'income' ? 'in' : 'out'}">${r.kind === 'income' ? '+' : '−'}${yen(r.amount)}</div></li>`; }).join('')}</ul>` : ''}
+      <h2 class="sec-title"><span class="mark">🔁</span> 固定費・定期の収入<span class="grow"></span><button class="btn small" data-act="kb-rec-edit" data-id="">＋ 足す</button></h2>
+      <p class="hint">家賃・スマホ代・サブスク・お小遣い・給料など。毎月・毎年・毎週の、その日になると自動で家計簿に入ります。</p>
+      <p class="hint">収入は「前借り」、支払いは「後払い」ができます。何月（何年・何日）の分かをえらぶと、その分が入るときに差し引きます。</p>
+      ${s.recurring.length ? `<ul class="lines">${s.recurring.map((r) => { const c = catOf(r.kind, r.cat); return `<li><div class="who"><button class="btn link" data-act="kb-rec-edit" data-id="${esc(r.id)}">${esc(c.icon)} ${esc(recName(r))}</button>
+        <small>${esc(freqLabel(r))}・${esc(acctOf(r.account).name)}${r.active === false ? '・お休み中' : ''}</small>
+        <button class="btn small" data-act="kb-shift-new" data-id="${esc(r.id)}">${r.kind === 'income' ? '💴 前借り' : '🕒 後払い'}</button></div>
+        <div class="amt ${r.kind === 'income' ? 'in' : 'out'}">${r.kind === 'income' ? '+' : '−'}${yen(r.amount)}</div></li>`; }).join('')}</ul>` : ''}
     </section>
     <section class="sec">
       <h2 class="sec-title"><span class="mark">🏷</span> 分類</h2>
@@ -283,8 +358,12 @@ const Kakeibo = (ctx) => {
   }
 
   // ---------- 入れる・直す（シート）----------
-  const titles = { 'kb-tx': '家計簿に入れる', 'kb-acct': '口座', 'kb-cat': '分類', 'kb-budget': '予算（1か月）', 'kb-rec': '固定費・毎月の収入', 'kb-adjust': '残高を合わせる' };
-  const title = (k) => (k === 'kb-tx' && ctx.U().sheet.id ? '記録を直す' : titles[k]);
+  const titles = { 'kb-tx': '家計簿に入れる', 'kb-acct': '口座', 'kb-cat': '分類', 'kb-budget': '予算（1か月）', 'kb-rec': '固定費・定期の収入', 'kb-adjust': '残高を合わせる' };
+  const title = (k) => {
+    const X = ctx.U().sheet;
+    if (k === 'kb-shift') { const r = settings().recurring.find((x) => x.id === X.rec); return r ? `${r.kind === 'income' ? '💴 前借り' : '🕒 後払い'}：${recName(r)}` : '前借り・後払い'; }
+    return k === 'kb-tx' && X.id ? '記録を直す' : titles[k];
+  };
 
   function openTx(kind, id) {
     const s = settings();
@@ -298,7 +377,7 @@ const Kakeibo = (ctx) => {
       id: t ? t.id : null, kind: k, amount: t ? String(t.amount) : '', date: t ? t.date : (KB.month === curYM() ? today() : `${KB.month}-01`),
       cat: t ? t.cat : (k === 'income' ? s.incomeCats[0].id : (KB.cat || s.expenseCats[0].id)),
       account: t ? t.account : (KB.acct || l.account || s.accounts[0].id), toAccount: t ? t.toAccount : (l.toAccount || (s.accounts[1] || s.accounts[0]).id),
-      title: t ? t.title : '', memo: t ? t.memo : '', rec: t ? t.rec : '', createdAt: t ? t.createdAt : 0, del: false,
+      title: t ? t.title : '', memo: t ? t.memo : '', rec: t ? t.rec : '', shift: t ? t.shift : '', base: t ? t.base : 0, shifted: t ? t.shifted : 0, createdAt: t ? t.createdAt : 0, del: false,
     });
   }
   function openAdjust(acctId, t) {
@@ -327,7 +406,8 @@ const Kakeibo = (ctx) => {
           <div class="field"><label for="kb-title">内容・お店（なくてもOK）</label><input id="kb-title" maxlength="60" list="kb-titles" data-bind="sheet.title" value="${esc(X.title)}" placeholder="${X.kind === 'income' ? '例：11月分' : X.kind === 'transfer' ? '例：ATMでおろした' : '例：コンビニ'}"><datalist id="kb-titles">${recentTitles.map((t) => `<option value="${esc(t)}">`).join('')}</datalist></div>
           <div class="field"><label for="kb-memo">メモ（なくてもOK）</label><input id="kb-memo" maxlength="300" data-bind="sheet.memo" value="${esc(X.memo)}"></div>
         </div>
-        ${X.rec ? '<p class="hint">固定費で自動で入った記録です。消すと、この月の分はもう入りません。</p>' : ''}
+        ${X.rec ? '<p class="hint">固定費で自動で入った記録です。消すと、この分はもう入りません。</p>' : ''}
+        ${X.shift ? '<p class="hint">前借り・後払いの記録です。消すと、前借り（後払いを払ったこと）も取り消します。</p>' : ''}
         ${delRow(X, 'この記録を消しますか？')}
         <div class="row end">${X.id ? '' : '<button type="button" class="btn" data-act="kb-save-more">保存して続ける</button>'}<button type="button" class="btn" data-act="sheet-close">やめる</button><button type="submit" class="btn primary">保存する</button></div>`;
     }
@@ -352,27 +432,35 @@ const Kakeibo = (ctx) => {
     if (k === 'kb-budget') return `<div class="field"><label for="kbu-total">1か月の予算（ぜんぶで）</label><div class="yen"><span>¥</span><input id="kbu-total" inputmode="numeric" data-bind="sheet.total" value="${esc(X.total)}" placeholder="0（決めない）"></div></div>
         <fieldset><legend>分類ごと（決めたいものだけ）</legend><div class="amount-rows">${s.expenseCats.map((c) => `<div class="amount-row"><label class="name" for="kbu-${esc(c.id)}">${esc(c.icon)} ${esc(c.name)}</label>
           <div class="yen"><span>¥</span><input id="kbu-${esc(c.id)}" inputmode="numeric" data-bind="sheet.cat" data-key="${esc(c.id)}" value="${esc(X.cats[c.id] || '')}"></div></div>`).join('')}</div></fieldset>${ctx.foot('保存する')}`;
+    if (k === 'kb-shift') return shiftBody();
     if (k === 'kb-rec') {
       const seg = (v, t) => `<button type="button" data-act="kb-rkind" data-v="${v}" aria-pressed="${X.kind === v}">${t}</button>`;
       return `<div><div class="seg">${seg('expense', '支出')}${seg('income', '収入')}</div></div>
         <div class="two"><div class="field"><label for="kr-title">名前</label><input id="kr-title" maxlength="40" data-bind="sheet.title" value="${esc(X.title)}" placeholder="${X.kind === 'income' ? '例：お小遣い' : '例：スマホ代'}"></div>
           <div class="field"><label for="kr-amount">金額</label><div class="yen"><span>¥</span><input id="kr-amount" inputmode="numeric" data-bind="sheet.amount" value="${esc(X.amount)}"></div></div></div>
-        <div class="field"><label for="kr-day">毎月何日？（31 で月末）</label><input id="kr-day" class="plain-input" inputmode="numeric" data-bind="sheet.day" value="${esc(X.day)}" style="max-width:6em"></div>
+        <fieldset><legend>くり返し</legend><div><div class="seg">${['month', 'year', 'week'].map((f) => `<button type="button" data-act="kb-rfreq" data-v="${f}" aria-pressed="${X.freq === f}">${{ month: '毎月', year: '毎年', week: '毎週' }[f]}</button>`).join('')}</div></div>
+          ${X.freq === 'week' ? `<div class="filters">${[...WD].map((w, i) => `<button type="button" class="pillbtn" data-act="kb-rwday" data-v="${i}" aria-pressed="${+X.wday === i}">${w}</button>`).join('')}</div>`
+            : `<div class="row">${X.freq === 'year' ? `<div class="field"><label for="kr-month">何月？</label><input id="kr-month" class="plain-input" inputmode="numeric" data-bind="sheet.month" value="${esc(X.month)}" style="max-width:5em"></div>` : ''}
+              <div class="field"><label for="kr-day">何日？（31 で月末）</label><input id="kr-day" class="plain-input" inputmode="numeric" data-bind="sheet.day" value="${esc(X.day)}" style="max-width:5em"></div></div>`}
+        </fieldset>
         <fieldset><legend>分類</legend>${chips(X.kind === 'income' ? s.incomeCats : s.expenseCats, 'kb-pick-cat', X.cat)}</fieldset>
         <fieldset><legend>${X.kind === 'income' ? 'どこに入る？' : 'どこから払う？'}</legend>${chips(s.accounts, 'kb-pick-acct', X.account)}</fieldset>
-        <label class="check"><input type="checkbox" id="kr-active" data-bind="sheet.active" ${X.active ? 'checked' : ''}> 毎月自動で入れる（外すとお休み）</label>
-        <p class="hint">${X.id ? '' : `${ymLabel(curYM())}から入ります（その日をすぎていれば、すぐに入ります）。`}</p>
+        <label class="check"><input type="checkbox" id="kr-active" data-bind="sheet.active" ${X.active ? 'checked' : ''}> 自動で入れる（外すとお休み）</label>
+        <p class="hint">${X.id ? '' : X.freq === 'month' ? `${ymLabel(curYM())}から入ります（その日をすぎていれば、すぐに入ります）。` : '今日から入ります。'}</p>
         ${X.id ? delRow(X, 'この固定費を消しますか？（もう入った記録は残ります）') : ''}${ctx.foot('保存する')}`;
     }
     return '';
   }
   function afterDraw() {
     const X = ctx.U().sheet, el = document.getElementById('kb-calc');
+    const pv = document.getElementById('sf-preview');
+    if (X && pv && X.sheetKind === 'kb-shift') { const r = settings().recurring.find((y) => y.id === X.rec); if (r) pv.innerHTML = shiftPreview(X, r); }
     if (X && X.kind && el) el.textContent = hasOp(X.amount) ? `＝ ${yen(calc(X.amount))}` : '';
   }
 
   function submit(k, more) {
     const X = ctx.U().sheet, s = settings();
+    if (k === 'kb-shift') return submitShift();
     if (k === 'kb-tx') {
       const amount = calc(X.amount);
       if (amount <= 0) return ctx.sheetErr('金額を入れてください');
@@ -380,7 +468,8 @@ const Kakeibo = (ctx) => {
       if (X.kind === 'transfer' && X.account === X.toAccount) return ctx.sheetErr('「どこから」と「どこへ」がおなじです');
       const body = { kind: X.kind, date: X.date, amount, account: X.account, title: X.title.trim(), memo: X.memo.trim(), createdAt: X.createdAt || 0 };
       if (X.kind === 'transfer') body.toAccount = X.toAccount; else body.cat = X.cat;
-      if (X.rec) body.rec = X.rec;
+      if (X.rec) { body.rec = X.rec; if (X.base) { body.base = X.base; body.shifted = X.shifted; } }
+      if (X.shift) body.shift = X.shift;
       run(KStore.saveTx(X.id, body), X.id ? '✓ 直しました' : `✓ ${X.kind === 'income' ? '収入' : X.kind === 'transfer' ? '振替' : '支出'} ${yen(amount)} を入れました`);
       KB.month = X.date.slice(0, 7);
       if (more) { X.amount = ''; X.title = ''; X.memo = ''; X.err = ''; ctx.drawSheet(); setTimeout(() => { const i = document.getElementById('kb-amount'); if (i) i.focus(); }, 30); }
@@ -412,10 +501,13 @@ const Kakeibo = (ctx) => {
     }
     if (k === 'kb-rec') {
       const amount = calc(X.amount), day = Math.min(31, Math.max(1, parseInt(String(X.day).replace(/\D/g, ''), 10) || 0));
+      const month = Math.min(12, Math.max(1, parseInt(String(X.month).replace(/\D/g, ''), 10) || 0));
       if (amount <= 0) return ctx.sheetErr('金額を入れてください');
-      if (!day) return ctx.sheetErr('何日かを入れてください（1〜31）');
+      if (X.freq !== 'week' && !day) return ctx.sheetErr('何日かを入れてください（1〜31）');
+      if (X.freq === 'year' && !month) return ctx.sheetErr('何月かを入れてください（1〜12）');
       const prev = s.recurring.find((r) => r.id === X.id);
-      const r = { id: X.id || 'r' + rid(), kind: X.kind, title: X.title.trim(), amount, day, cat: X.cat, account: X.account, active: !!X.active, start: prev ? prev.start : curYM(), skip: prev ? prev.skip || [] : [] };
+      const r = { id: X.id || 'r' + rid(), kind: X.kind, title: X.title.trim(), amount, freq: X.freq, day: day || 1, month: month || 1, wday: +X.wday || 0, cat: X.cat, account: X.account, active: !!X.active,
+        start: prev ? prev.start : curYM(), startDate: prev ? prev.startDate || '' : today(), skip: prev ? prev.skip || [] : [] };
       saveSettings({ ...s, recurring: X.id ? s.recurring.map((x) => (x.id === X.id ? r : x)) : [...s.recurring, r] }, '✓ 固定費を保存しました');
       ctx.closeSheet(); setTimeout(fillRecurring, 300); return;
     }
@@ -426,14 +518,16 @@ const Kakeibo = (ctx) => {
     const sk = X.sheetKind;
     if (sk === 'kb-tx' || sk === 'kb-adjust') {
       const t = txs().find((x) => x.id === X.id);
+      if (t && t.shift) { deleteShiftOf(t); ctx.closeSheet(); return; }
       if (t && t.rec) {
-        const [, rId, m] = /^rec_(.+)_(\d{4}-\d{2})$/.exec(t.id) || [];
+        const [, rId, m] = /^rec_(.+)_(\d{4}(?:-\d{2}(?:-\d{2})?)?)$/.exec(t.id) || [];
         if (rId) saveSettings({ ...s, recurring: s.recurring.map((r) => (r.id === rId ? { ...r, skip: [...new Set([...(r.skip || []), m])] } : r)) });
       }
       run(KStore.deleteTx(X.id), '記録を消しました');
     } else if (sk === 'kb-acct') saveSettings({ ...s, accounts: s.accounts.filter((a) => a.id !== X.id) }, '口座を消しました');
     else if (sk === 'kb-cat') { const key = X.kind === 'income' ? 'incomeCats' : 'expenseCats'; saveSettings({ ...s, [key]: s[key].filter((c) => c.id !== X.id) }, '分類を消しました'); }
     else if (sk === 'kb-rec') saveSettings({ ...s, recurring: s.recurring.filter((r) => r.id !== X.id) }, '固定費を消しました');
+    else if (sk === 'kb-shift') { const x = shifts().find((y) => y.id === X.id); if (x) deleteShift(x); }
     ctx.closeSheet();
   }
 
@@ -450,6 +544,12 @@ const Kakeibo = (ctx) => {
       case 'kb-edit': openTx(null, d.id); return 'done';
       case 'kb-kind': if (X) { X.kind = d.v; X.cat = d.v === 'income' ? s.incomeCats[0].id : s.expenseCats[0].id; ctx.drawSheet(); } return 'done';
       case 'kb-rkind': if (X) { X.kind = d.v; X.cat = d.v === 'income' ? s.incomeCats[0].id : s.expenseCats[0].id; ctx.drawSheet(); } return 'done';
+      case 'kb-rfreq': if (X) { X.freq = d.v; ctx.drawSheet(); } return 'done';
+      case 'kb-rwday': if (X) { X.wday = d.v; ctx.drawSheet(); } return 'done';
+      case 'kb-shift-new': openShift(d.id, null); return 'done';
+      case 'kb-shift-edit': { const x = shifts().find((y) => y.id === d.id); if (x) openShift(x.rec, x); return 'done'; }
+      case 'kb-shift-period': if (X) { X.period = d.v; const r = s.recurring.find((y) => y.id === X.rec); if (r) X.amount = String(Math.max(0, r.amount - shiftSum(r.id, d.v))); ctx.drawSheet(); } return 'done';
+      case 'kb-shift-acct': if (X) { X.account = d.v; ctx.drawSheet(); } return 'done';
       case 'kb-pick-cat': if (X) { X.cat = d.v; ctx.drawSheet(); } return 'done';
       case 'kb-pick-acct': if (X) { X.account = d.v; ctx.drawSheet(); } return 'done';
       case 'kb-pick-to': if (X) { X.toAccount = d.v; ctx.drawSheet(); } return 'done';
@@ -465,8 +565,8 @@ const Kakeibo = (ctx) => {
       case 'kb-budget': { const cats = {}; Object.entries(s.budget.cats).forEach(([k, v]) => { cats[k] = String(v); }); ctx.openSheet('kb-budget', { total: s.budget.total ? String(s.budget.total) : '', cats }); return 'done'; }
       case 'kb-rec-edit': {
         const r = s.recurring.find((x) => x.id === d.id);
-        ctx.openSheet('kb-rec', r ? { id: r.id, kind: r.kind, title: r.title, amount: String(r.amount), day: String(r.day), cat: r.cat, account: r.account, active: r.active !== false, del: false }
-          : { id: null, kind: 'expense', title: '', amount: '', day: '1', cat: s.expenseCats[0].id, account: s.accounts[0].id, active: true, del: false });
+        ctx.openSheet('kb-rec', r ? { id: r.id, kind: r.kind, title: r.title, amount: String(r.amount), freq: freqOf(r), day: String(r.day || 1), month: String(r.month || 1), wday: String(r.wday || 0), cat: r.cat, account: r.account, active: r.active !== false, del: false }
+          : { id: null, kind: 'expense', title: '', amount: '', freq: 'month', day: '1', month: String(new Date().getMonth() + 1), wday: String(new Date().getDay()), cat: s.expenseCats[0].id, account: s.accounts[0].id, active: true, del: false });
         return 'done';
       }
       case 'kb-csv': exportCsv(d.v); return 'done';
@@ -478,20 +578,139 @@ const Kakeibo = (ctx) => {
   const asked = new Set();
   function fillRecurring() {
     const S = ctx.S();
-    if (!S.user || !S.txReady || !S.kbReady) return;
+    if (!S.user || !S.txReady || !S.kbReady || !S.shiftsReady) return;
     const s = settings(), have = new Set(txs().map((t) => t.id)), now = today(), list = [];
     s.recurring.forEach((r) => {
-      if (r.active === false || !r.amount || !/^\d{4}-\d{2}$/.test(r.start || '')) return;
-      for (let m = r.start, n = 0; m <= now.slice(0, 7) && n < 36; m = addMonth(m, 1), n++) {
-        const date = `${m}-${pad(Math.min(r.day, daysIn(m)))}`, id = `rec_${r.id}_${m}`;
-        if (date > now || have.has(id) || asked.has(id) || (r.skip || []).includes(m)) continue;
+      if (r.active === false || !r.amount) return;
+      // さかのぼるのは、毎月は3年・毎年は5年・毎週は1年まで
+      const back = freqOf(r) === 'week' ? addDays(now, -366) : freqOf(r) === 'year' ? `${+now.slice(0, 4) - 5}-01-01` : `${addMonth(now.slice(0, 7), -36)}-01`;
+      occurrences(r, back, now, 400).forEach(({ period, date }) => {
+        const id = recTxId(r, period);
+        if (have.has(id) || asked.has(id) || (r.skip || []).includes(period)) return;
         asked.add(id);
-        const body = { kind: r.kind, date, amount: r.amount, cat: r.cat, account: r.account, title: r.title, memo: '', rec: r.id };
+        const sh = shiftSum(r.id, period);
+        const body = { kind: r.kind, date, amount: Math.max(0, r.amount - sh), base: r.amount, shifted: sh, cat: r.cat, account: r.account, title: r.title, memo: '', rec: r.id };
         list.push({ id, body });
-      }
+      });
     });
     if (!list.length) return;
     run(KStore.putTxMany(list), `🔁 固定費を ${list.length}件 入れました`);
+  }
+
+  // ---------- 前借り・後払い ----------
+  // 選べる「何の分」：前借りはこれから入る分、後払いは近ごろ・もうすぐの分
+  function shiftPeriods(r, kind) {
+    const now = today(), f = freqOf(r);
+    if (kind === 'advance') {
+      const to = f === 'week' ? addDays(now, 70) : f === 'year' ? `${+now.slice(0, 4) + 3}-12-31` : `${addMonth(now.slice(0, 7), 12)}-28`;
+      return occurrences(r, now, to, 60).filter((o) => !txs().some((t) => t.id === recTxId(r, o.period))).slice(0, f === 'year' ? 3 : f === 'week' ? 10 : 12);
+    }
+    const from = f === 'week' ? addDays(now, -42) : f === 'year' ? `${+now.slice(0, 4) - 1}-01-01` : `${addMonth(now.slice(0, 7), -3)}-01`;
+    const to = f === 'week' ? addDays(now, 14) : f === 'year' ? `${+now.slice(0, 4)}-12-31` : `${addMonth(now.slice(0, 7), 1)}-28`;
+    // もう来た分（新しい順）を先に、そのあとにこれから来る分
+    const all = occurrences(r, from, to, 60);
+    return all.filter((o) => o.date <= now).reverse().concat(all.filter((o) => o.date > now));
+  }
+  function openShift(recId, x) {
+    const r = settings().recurring.find((y) => y.id === recId);
+    if (!r) return;
+    if (x) { ctx.openSheet('kb-shift', { id: x.id, rec: r.id, kind: x.kind, period: x.period, amount: String(x.amount), date: x.date, account: x.account || r.account, memo: x.memo, paid: x.paid, payDate: today(), del: false }); return; }
+    const kind = r.kind === 'income' ? 'advance' : 'defer', ps = shiftPeriods(r, kind), p = ps[0];
+    ctx.openSheet('kb-shift', { id: null, rec: r.id, kind, period: p ? p.period : '', amount: p ? String(Math.max(0, r.amount - shiftSum(r.id, p.period))) : '', date: kind === 'advance' ? today() : '', account: r.account, memo: '', del: false });
+  }
+  function shiftBody() {
+    const X = ctx.U().sheet, s = settings(), r = s.recurring.find((y) => y.id === X.rec);
+    if (!r) return '<p class="hint">その固定費はもうありません。</p>';
+    const adv = X.kind === 'advance', lbl = periodLabel(X.period);
+    if (X.id) {
+      const x = shifts().find((y) => y.id === X.id) || {};
+      const left = Math.max(0, r.amount - shiftSum(r.id, X.period));
+      return `<p class="hint">${esc(recName(r))}（${esc(freqLabel(r))}・${yen(r.amount)}）の <b>${esc(lbl)}</b> を ${yen(+X.amount)} ${adv ? '前借りしました' : '後払いにしました'}。${esc(lbl)}は ${yen(left)} になります。</p>
+        ${X.memo ? `<p class="memo">${esc(X.memo)}</p>` : ''}
+        ${!adv && !x.paid ? `<div class="notice quiet"><h3>🕒 まだ払っていません${X.date ? `（払う予定 ${esc(md(X.date))}）` : ''}</h3>
+          <div class="two"><div class="field"><label for="sf-paydate">払った日</label><input id="sf-paydate" type="date" data-bind="sheet.payDate" value="${esc(X.payDate)}"></div></div>
+          <fieldset><legend>どこから払った？</legend>${chips(s.accounts, 'kb-shift-acct', X.account)}</fieldset>
+          <div class="row end"><button type="submit" class="btn primary">払ったことにする（支出に入れる）</button></div></div>`
+          : !adv ? `<p class="hint">✓ ${esc(md(x.paidDate || ''))}に払いました。</p>` : ''}
+        ${delRow(X, adv ? 'この前借りを取り消しますか？（前借りで入った収入も消えます）' : 'この後払いを取り消しますか？（払った記録も消えます）')}
+        <div class="row end"><button type="button" class="btn" data-act="sheet-close">とじる</button></div>`;
+    }
+    const ps = shiftPeriods(r, X.kind);
+    const chipsP = ps.length ? `<div class="filters">${ps.map((o) => { const done = shiftSum(r.id, o.period); return `<button type="button" class="pillbtn" data-act="kb-shift-period" data-v="${esc(o.period)}" aria-pressed="${X.period === o.period}">${esc(periodLabel(o.period))}${done ? `（${adv ? '前借り' : '後払い'}済み ${yen(done)}）` : ''}</button>`; }).join('')}</div>`
+      : `<p class="hint">${adv ? 'これから入る分がありません。' : '近ごろの分がありません。'}</p>`;
+    return `<p class="hint">${esc(recName(r))}：${esc(freqLabel(r))}・${yen(r.amount)}</p>
+      <fieldset><legend>${adv ? '何の分を前借りする？' : '何の分を後払いにする？'}</legend>${chipsP}</fieldset>
+      ${X.period ? `<div class="two">
+        <div class="field"><label for="sf-amount">${adv ? '前借りする金額' : '後払いにする金額'}</label><div class="yen"><span>¥</span><input id="sf-amount" inputmode="numeric" data-bind="sheet.amount" value="${esc(X.amount)}"></div></div>
+        <div class="field"><label for="sf-date">${adv ? '前借りした日' : '払う予定の日（なくてもOK）'}</label><input id="sf-date" type="date" data-bind="sheet.date" value="${esc(X.date)}"></div></div>
+        ${adv ? `<fieldset><legend>どこに入った？</legend>${chips(s.accounts, 'kb-shift-acct', X.account)}</fieldset>` : ''}
+        <div class="field"><label for="sf-memo">メモ（なくてもOK）</label><input id="sf-memo" maxlength="200" data-bind="sheet.memo" value="${esc(X.memo)}"></div>
+        <div class="preview" id="sf-preview">${shiftPreview(X, r)}</div>
+        ${ctx.foot(adv ? '前借りする' : '後払いにする')}` : `<div class="row end"><button type="button" class="btn" data-act="sheet-close">やめる</button></div>`}`;
+  }
+  function shiftPreview(X, r) {
+    const adv = X.kind === 'advance', lbl = periodLabel(X.period), amt = calc(X.amount), left = Math.max(0, r.amount - shiftSum(r.id, X.period) - amt);
+    return `${adv ? `いま ${yen(amt)} を収入に入れて、` : `${esc(lbl)}の支払いから ${yen(amt)} を外して「まだ払っていない」に入れ、`}${esc(lbl)}は <span class="num">${yen(left)}</span> になります。`;
+  }
+  function submitShift() {
+    const X = ctx.U().sheet, s = settings(), r = s.recurring.find((y) => y.id === X.rec);
+    if (!r) return ctx.closeSheet();
+    const adv = X.kind === 'advance', lbl = periodLabel(X.period), c = catOf(r.kind, r.cat);
+    if (X.id) {
+      // 後払いを払った
+      const x = shifts().find((y) => y.id === X.id);
+      if (!x || adv || x.paid) return ctx.closeSheet();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(X.payDate)) return ctx.sheetErr('払った日を入れてください');
+      const txId = KStore.newKbId('tx'), body = { ...x }; delete body.id;
+      run(KStore.kbBatch([
+        { op: 'set', col: 'tx', id: txId, body: { kind: 'expense', date: X.payDate, amount: x.amount, cat: r.cat, account: X.account, title: `${recName(r)} ${lbl} 後払い`, memo: x.memo, shift: x.id } },
+        { op: 'set', col: 'shifts', id: x.id, body: { ...body, paid: true, paidDate: X.payDate, txId, account: X.account } },
+      ]), `✓ ${recName(r)}（${lbl}）の後払い ${yen(x.amount)} を払いました`);
+      KB.month = X.payDate.slice(0, 7);
+      return ctx.closeSheet();
+    }
+    const amount = calc(X.amount);
+    if (!X.period) return ctx.sheetErr(adv ? '何の分を前借りするかをえらんでください' : '何の分を後払いにするかをえらんでください');
+    if (amount <= 0) return ctx.sheetErr('金額を入れてください');
+    const room = r.amount - shiftSum(r.id, X.period);
+    if (amount > room) return ctx.sheetErr(`${lbl}は、あと ${yen(Math.max(0, room))} までです`);
+    if (adv && !/^\d{4}-\d{2}-\d{2}$/.test(X.date)) return ctx.sheetErr('前借りした日を入れてください');
+    if (X.date && !/^\d{4}-\d{2}-\d{2}$/.test(X.date)) return ctx.sheetErr('日付を入れてください');
+    const id = KStore.newKbId('shifts'), ops = [];
+    const sh = { kind: X.kind, rec: r.id, period: X.period, amount, date: X.date || '', account: X.account, memo: (X.memo || '').trim(), paid: false, txId: '' };
+    if (adv) {
+      sh.txId = KStore.newKbId('tx');
+      ops.push({ op: 'set', col: 'tx', id: sh.txId, body: { kind: 'income', date: X.date, amount, cat: r.cat, account: X.account, title: `${recName(r)} ${lbl} 前借り`, memo: sh.memo, shift: id } });
+    }
+    ops.push({ op: 'set', col: 'shifts', id, body: sh });
+    ops.push(...recTxOps(r, X.period, shiftSum(r.id, X.period) + amount));
+    run(KStore.kbBatch(ops), adv ? `✓ ${recName(r)}（${lbl}）から ${yen(amount)} 前借りしました` : `✓ ${recName(r)}（${lbl}）の ${yen(amount)} を後払いにしました`);
+    if (adv) KB.month = X.date.slice(0, 7);
+    ctx.closeSheet();
+  }
+  // 取り消す：前借り・後払いと、それで入った記録を消し、その分の額を元にもどす
+  function deleteShift(x) {
+    const r = settings().recurring.find((y) => y.id === x.rec);
+    const ops = [{ op: 'delete', col: 'shifts', id: x.id }];
+    if (x.txId && txs().some((t) => t.id === x.txId)) ops.push({ op: 'delete', col: 'tx', id: x.txId });
+    if (r) ops.push(...recTxOps(r, x.period, shiftSum(r.id, x.period, x.id)));
+    run(KStore.kbBatch(ops), x.kind === 'advance' ? '前借りを取り消しました' : '後払いを取り消しました');
+  }
+  // 家計簿の記録の方から消したとき：前借りなら前借りごと取り消し、後払いを払った記録なら「まだ払っていない」にもどす
+  function deleteShiftOf(t) {
+    const x = shifts().find((y) => y.id === t.shift);
+    if (!x) { run(KStore.deleteTx(t.id), '記録を消しました'); return; }
+    if (x.kind === 'advance') { deleteShift(x); return; }
+    const body = { ...x, paid: false, paidDate: '', txId: '' }; delete body.id;
+    run(KStore.kbBatch([{ op: 'delete', col: 'tx', id: t.id }, { op: 'set', col: 'shifts', id: x.id, body }]), '払った記録を消しました（まだ払っていない、にもどしました）');
+  }
+  // ウィジェットの期限：まだ払っていない後払いで、払う予定の日があるもの
+  function dueItems() {
+    const s = settings();
+    return unpaidDefers().filter((x) => x.date).map((x) => {
+      const r = s.recurring.find((y) => y.id === x.rec);
+      return { d: 'out', who: `${recName(r)}（${periodLabel(x.period)}）`, amt: x.amount, due: x.date, days: KL.daysLeft(x.date), title: '後払い' };
+    });
   }
 
   // ---------- 書き出し ----------
@@ -535,5 +754,5 @@ const Kakeibo = (ctx) => {
     return { m: +m.slice(5, 7), exp: x.exp, inc: x.inc, budget: b };
   }
 
-  return { view, sheetBody, title, submit, click, afterDraw, fillRecurring, widget, state: KB, has: (k) => k.startsWith('kb-') };
+  return { view, sheetBody, title, submit, click, afterDraw, fillRecurring, widget, dueItems, state: KB, has: (k) => k.startsWith('kb-') };
 };

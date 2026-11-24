@@ -53,7 +53,13 @@
   - **通帳**：口座を押すと、お引出し・お預入れ・残高の通帳の形で出る。「⚖️ 残高を合わせる」でほんとうの残高に直せる（収入・支出には数えない）
 - **🤝 貸し借り**：アプリを使っていない人との貸し借り（貸した・借りた・返済・完済・返す期限）
 - **📈 1年**：月ごとの収入・支出の棒グラフ、1年の合計と1か月の平均、1年で何に使ったか
-- **⚙️ 設定**：予算、**固定費・毎月の収入**（家賃・スマホ代・お小遣いなど。毎月その日になると自動で入る）、分類（足す・直す・消す）、**CSV の書き出し**（家計簿・貸し借り）
+- **⚙️ 設定**：予算、**固定費・定期の収入**（家賃・スマホ代・お小遣い・給料など。**毎月・毎年・毎週** のその日になると自動で入る）、分類（足す・直す・消す）、**CSV の書き出し**（家計簿・貸し借り）
+- **💴 前借り・🕒 後払い**（設定の固定費・定期の収入から）：何月（毎年なら何年・毎週なら何日）の分かをえらぶ。その分が自動で入るときに、前借り・後払いした額を差し引く
+  （もう入っている分なら、その記録の額を直す。記録には「前借り ¥… を差し引き」と出る）
+  - 前借り（定期の収入）：前借りした日に、その額を収入として入れる。例：12月分のお小遣いから ¥2,000 → いま +¥2,000、12月分は ¥3,000
+  - 後払い（定期の支払い）：その分の支払いから外して「まだ払っていない」に出す（払う予定の日つき・ウィジェットの期限にも出る）。「払った」で、その日の支出として入れる
+  - 家計簿の「🔁 前借り・後払い」に、まだ払っていない後払いと、これから入る分の前借りが出る。口座の「ぜんぶ合わせると」から、まだ払っていない後払いを引く
+  - 取り消すと、前借りで入った収入（後払いを払った記録）も消え、その分の額が元にもどる
 
 ### ファイル
 
@@ -96,8 +102,11 @@ kashikari_books/{帳簿ID}/loans/{id}      { lender, title, date, memo, mode, to
 kashikari_books/{帳簿ID}/claims/{id}     { loanId, lender, from, for, coverLoanId, amount, date, note, status: pending|approved|rejected }（for があれば肩代わり）
 kashikari_private/{uid}/entries/{id}     自分だけの貸し借り { dir: lent|borrowed, who, title, date, amount, due, repayments }
 kashikari_private/{uid}/tx/{id}          家計簿 { kind: expense|income|transfer|adjust, date, amount, cat, account, toAccount, dir, title, memo, rec }
-                                         （固定費で入ったものは id が rec_{固定費ID}_{年-月}。消した月は設定の skip に覚えて入れ直さない）
-kashikari_private/{uid}/kakeibo/settings 家計簿の設定 { expenseCats, incomeCats, accounts: [{ id, name, icon, initial }], budget: { total, cats }, recurring }
+                                         （固定費で入ったものは id が rec_{固定費ID}_{何の分}。消した分は設定の skip に覚えて入れ直さない）
+kashikari_private/{uid}/kakeibo/settings 家計簿の設定 { expenseCats, incomeCats, accounts: [{ id, name, icon, initial }], budget: { total, cats },
+                                         recurring: [{ id, kind, title, amount, freq: month|year|week, day, month, wday, cat, account, active, start, startDate, skip }] }
+kashikari_private/{uid}/shifts/{id}      前借り・後払い { kind: advance|defer, rec, period（毎月 YYYY-MM・毎年 YYYY・毎週 YYYY-MM-DD）, amount, date, account, memo, txId, paid, paidDate }
+                                         （固定費で入った記録には base（もとの額）と shifted（差し引いた額）、前借り・後払いで入った記録には shift）
 ```
 
 ### ★ はじめに1回だけやること（Firebase は貸し借り帳だけのプロジェクト。すするanki・航海日誌とは別）

@@ -15,13 +15,14 @@
   const BOOKS = 'kashikari_books', PRIVATE = 'kashikari_private';
 
   let auth = null, db = null, user = null;
-  let booksUnsub = null, privUnsub = null, txUnsub = null, kbUnsub = null;
+  let booksUnsub = null, privUnsub = null, txUnsub = null, kbUnsub = null, shUnsub = null;
   const bookSubs = {}; // 帳簿ID -> [unsub, unsub]
   const st = {
     available: false, configMissing: !(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId), authReady: false, user: null, error: '',
     online: typeof navigator === 'undefined' || navigator.onLine !== false, pending: false,
     booksReady: false, books: [], loans: {}, claims: {}, privateReady: false, personal: [],
     txReady: false, tx: [], kbReady: false, kb: null, // 家計簿（収入・支出・振替）と、その設定（分類・口座・予算・固定費）
+    shiftsReady: false, shifts: [], // 固定費・定期収入の前借り・後払い
   };
   const listeners = new Set();
   let emitQueued = false;
@@ -66,7 +67,17 @@
     return {
       id, kind: ['income', 'transfer', 'adjust'].includes(v.kind) ? v.kind : 'expense', dir: v.dir === 'minus' ? 'minus' : 'plus', date: str(v.date, 10), amount: num(v.amount),
       cat: str(v.cat, 40), account: str(v.account, 40), toAccount: str(v.toAccount, 40), title: str(v.title, 60), memo: str(v.memo, 300),
-      rec: str(v.rec, 40), createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
+      rec: str(v.rec, 40), base: num(v.base), shifted: num(v.shifted), shift: str(v.shift, 40), createdAt: num(v.createdAt), updatedAt: num(v.updatedAt),
+    };
+  }
+  // 前借り（定期収入）・後払い（定期の支払い）：kashikari_private/{uid}/shifts/{id}
+  //   { kind: advance|defer, rec: 固定費ID, period: 何の分か（毎月 YYYY-MM・毎年 YYYY・毎週 YYYY-MM-DD）, amount, date: 前借りした日・後払いを払う予定の日,
+  //     account, memo, txId: 入った（払った）記録, paid: 後払いを払ったか, paidDate }
+  function cleanShift(id, v) {
+    v = v || {};
+    return {
+      id, kind: v.kind === 'defer' ? 'defer' : 'advance', rec: str(v.rec, 40), period: str(v.period, 10), amount: num(v.amount), date: day(v.date),
+      account: str(v.account, 40), memo: str(v.memo, 200), txId: str(v.txId, 60), paid: v.paid === true, paidDate: day(v.paidDate), createdAt: num(v.createdAt),
     };
   }
   function cleanEntry(id, v) {
@@ -114,7 +125,8 @@
     if (privUnsub) { try { privUnsub(); } catch (e) {} privUnsub = null; }
     if (txUnsub) { try { txUnsub(); } catch (e) {} txUnsub = null; }
     if (kbUnsub) { try { kbUnsub(); } catch (e) {} kbUnsub = null; }
-    st.tx = []; st.kb = null; st.txReady = false; st.kbReady = false;
+    if (shUnsub) { try { shUnsub(); } catch (e) {} shUnsub = null; }
+    st.tx = []; st.kb = null; st.txReady = false; st.kbReady = false; st.shifts = []; st.shiftsReady = false;
     Object.keys(bookSubs).concat(Object.keys(retryTimers)).forEach((id) => unwatchBook(id));
     st.books = []; st.loans = {}; st.claims = {}; st.personal = []; st.booksReady = false; st.privateReady = false;
   }
@@ -147,6 +159,12 @@
       st.pending = snap.metadata.hasPendingWrites;
       emit();
     }, (e) => { st.txReady = true; st.error = e.code || e.message; emit(); });
+    shUnsub = db.collection(PRIVATE).doc(uid).collection('shifts').onSnapshot((snap) => {
+      if (!user || user.uid !== uid) return;
+      st.shifts = snap.docs.map((d) => cleanShift(d.id, d.data()));
+      st.shiftsReady = true;
+      emit();
+    }, (e) => { st.shiftsReady = true; st.error = e.code || e.message; emit(); });
     kbUnsub = db.collection(PRIVATE).doc(uid).collection('kakeibo').doc('settings').onSnapshot((snap) => {
       if (!user || user.uid !== uid) return;
       st.kb = snap.exists ? snap.data() : null;
@@ -349,6 +367,17 @@
       }
     },
     // 設定（分類・口座・予算・固定費）：kashikari_private/{uid}/kakeibo/settings
+    // 家計簿をまとめて書く（前借り・後払いと、それに合わせた記録を1回で）：ops = [{ op: set|delete, col: tx|shifts, id, body }]
+    newKbId(col) { need(); return db.collection(PRIVATE).doc(user.uid).collection(col).doc().id; },
+    async kbBatch(ops) {
+      need();
+      const base = db.collection(PRIVATE).doc(user.uid), b = db.batch();
+      ops.forEach((o) => {
+        const ref = base.collection(o.col).doc(o.id);
+        if (o.op === 'delete') b.delete(ref); else b.set(ref, clean({ ...o.body, updatedAt: now(), createdAt: o.body.createdAt || now() }));
+      });
+      await b.commit();
+    },
     async saveKb(settings) { need(); await db.collection(PRIVATE).doc(user.uid).collection('kakeibo').doc('settings').set(clean({ ...settings, updatedAt: now() })); },
   };
   init();
