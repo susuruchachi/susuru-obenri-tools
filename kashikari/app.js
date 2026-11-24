@@ -439,6 +439,7 @@
         <span class="grow"></span>${holder ? '<button class="btn primary small" data-act="charge-new">＋ 明細を入れる</button>' : '<button class="btn primary small" data-act="creport-new">＋ 使ったのを報告</button>'}</div>
       <div class="ctable"><table><thead><tr><th>だれ</th><th class="r">報告</th><th class="r">明細</th><th class="r"></th></tr></thead><tbody>${rows}</tbody></table></div>
       <h3 class="sec-title"><span class="mark">🧾</span> ${holder ? 'みんなの報告' : 'あなたの報告'}</h3>
+      ${holder && reps.length ? `<div class="row"><button class="btn small" data-act="card-zip" ${U.zipBusy ? 'disabled' : ''}>${U.zipBusy ? `⬇ 集めています… ${U.zipBusy}` : `⬇ この月のレシートをまとめて保存（写真 ${reps.filter((r) => r.hasPhoto).length}枚・一覧つき）`}</button></div>` : ''}
       ${myReps.length ? `<ul class="creps">${myReps.map(repRow).join('')}</ul>` : '<p class="empty">この月の報告はまだありません。</p>'}
       ${lonely.length ? `<h3 class="sec-title"><span class="mark">⚠</span> 報告がない明細</h3><ul class="lines">${lonely.map((x) => `<li><div class="who">${holder ? nameH(b, x.for) + '・' : ''}${esc(x.place || '（明細）')}<small>${esc(fmtDate(x.date))}${x.memo ? '・' + esc(x.memo) : ''}</small>
           ${holder ? `<button class="btn link" data-act="charge-edit" data-id="${esc(x.id)}">直す</button>` : '<span class="hint">報告してください</span>'}</div><div class="amt">${yen(x.amount)}</div></li>`).join('')}</ul>` : ''}`;
@@ -496,7 +497,7 @@
       ${X.id ? (X.del ? `<div class="confirm"><span>この明細を消しますか？</span><button type="button" class="btn small danger" data-act="charge-del-yes">消す</button><button type="button" class="btn small" data-act="card-del-no">やめる</button></div>` : '<div class="row"><button type="button" class="btn small danger" data-act="card-del">消す</button></div>') : ''}
       ${foot('保存する')}`;
     }
-    if (k === 'cphoto') return X.data ? `<img class="receipt big" src="${esc(X.data)}" alt="レシートの写真"><div class="row end"><button type="button" class="btn" data-act="sheet-close">とじる</button></div>`
+    if (k === 'cphoto') return X.data ? `<img class="receipt big" src="${esc(X.data)}" alt="レシートの写真"><div class="row end"><button type="button" class="btn" data-act="card-photo-dl">⬇ 写真を保存</button><button type="button" class="btn" data-act="sheet-close">とじる</button></div>`
       : `<p class="empty">${X.err ? esc(X.err) : '写真を読み込み中…'}</p><div class="row end"><button type="button" class="btn" data-act="sheet-close">とじる</button></div>`;
     return '';
   }
@@ -526,6 +527,42 @@
       U.cardMonth = X.date.slice(0, 7); closeSheet();
     }
   }
+  // 持ち主：その月のレシートの写真を、一覧（CSV）といっしょに ZIP にまとめて保存
+  async function saveReceiptsZip(b, c, m) {
+    const reps = (S.cardReports[b.id] || []).filter((r) => r.card === c.id && r.date.startsWith(m)).sort((x, y) => x.date.localeCompare(y.date) || x.createdAt - y.createdAt);
+    const chs = (S.cardCharges[b.id] || []).filter((x) => x.card === c.id && x.date.startsWith(m)).sort((x, y) => x.date.localeCompare(y.date));
+    const mt = cardMatch(reps, chs), withPhoto = reps.filter((r) => r.hasPhoto);
+    const entries = [], fileOf = {}, missing = [];
+    U.zipBusy = `0/${withPhoto.length}`; render();
+    try {
+      for (let i = 0; i < withPhoto.length; i++) {
+        const r = withPhoto[i];
+        U.zipBusy = `${i + 1}/${withPhoto.length}`; render();
+        const bytes = KFiles.dataUrlBytes(await KStore.getCardPhoto(b.id, r.id));
+        if (!bytes) { missing.push(r); continue; }
+        const name = KFiles.safeName(`${r.date}_${nameIn(b, r.by)}_${r.amount}円_${r.place || 'レシート'}`) + '.jpg';
+        entries.push({ name, data: bytes, date: r.date });
+        fileOf[r.id] = entries.length - 1;
+      }
+      // ZIP の中での名前（重なったら _2 がつく）に合わせるため、先に一度つくって名前を決める
+      const names = [], used = new Set();
+      entries.forEach((e) => { let nm = e.name, n = 2; while (used.has(nm)) { nm = e.name.replace(/\.jpg$/, `_${n}.jpg`); n++; } used.add(nm); names.push(nm); e.name = nm; });
+      const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const rows = [['日付', 'だれ', '何に・どこで', '報告の額', '明細の額', '差', '持ち主の確認', 'レシートの写真', 'メモ']];
+      reps.forEach((r) => {
+        const ch = mt.byReport[r.id] ? chs.find((x) => x.id === mt.byReport[r.id]) : null;
+        rows.push([r.date, nameIn(b, r.by), r.place, r.amount, ch ? ch.amount : '', ch ? ch.amount - r.amount : '', r.checked ? '確認済み' : '', fileOf[r.id] !== undefined ? names[fileOf[r.id]] : r.hasPhoto ? '（読めませんでした）' : '（写真なし）', r.memo]);
+      });
+      chs.filter((x) => !mt.used.has(x.id)).forEach((x) => rows.push([x.date, nameIn(b, x.for), x.place, '', x.amount, '', '', '（報告なし）', x.memo]));
+      entries.push({ name: `一覧_${m}.csv`, data: KFiles.textBytes('\ufeff' + rows.map((r) => r.map(q).join(',')).join('\r\n')), date: `${m}-01` });
+      const how = KFiles.save(`receipts_${m}.zip`, 'application/zip', KFiles.zip(entries));
+      if (how === 'browser') toast(`⬇ ${+m.slice(5, 7)}月のレシート ${entries.length - 1}枚と一覧を保存しました${missing.length ? `（${missing.length}枚は読めませんでした）` : ''}`);
+      else if (how === 'app' && missing.length) toast(`${missing.length}枚は読めませんでした`, true);
+      else if (!how) toast(window.KashikariApp ? 'アプリを新しくすると保存できます（ブラウザで開いても保存できます）' : '保存できませんでした', true);
+    } catch (e) {
+      toast('保存できませんでした（' + errText(e) + '）', true);
+    } finally { U.zipBusy = ''; render(); }
+  }
   function cardClick(a, d) {
     const b = book(), X = U.sheet, c = cardsOf(b).find((x) => x.id === U.cardId) || cardsOf(b)[0];
     switch (a) {
@@ -546,6 +583,14 @@
         KStore.getCardPhoto(b.id, d.id).then((data) => { if (U.sheet && U.sheet.rid === d.id) { U.sheet.data = data; U.sheet.err = data ? '' : '写真が見つかりません'; drawSheet(); } }, (e) => { if (U.sheet) { U.sheet.err = errText(e); drawSheet(); } });
         return true;
       }
+      case 'card-photo-dl': {
+        const r = X && (S.cardReports[b.id] || []).find((y) => y.id === X.rid), bytes = X && KFiles.dataUrlBytes(X.data);
+        if (!bytes) return true;
+        const how = KFiles.save(`receipt_${r ? r.date : today()}_${r ? r.amount + 'yen' : X.rid}.jpg`, 'image/jpeg', bytes);
+        if (how === 'browser') toast('⬇ レシートの写真を保存しました'); else if (!how) toast(window.KashikariApp ? 'アプリを新しくすると保存できます（ブラウザで開いても保存できます）' : '保存できませんでした', true);
+        return true;
+      }
+      case 'card-zip': if (!U.zipBusy) saveReceiptsZip(b, c, U.cardMonth || ymNow()); return true;
       case 'card-del': if (X) { X.del = true; drawSheet(); } return true;
       case 'card-del-no': if (X) { X.del = false; drawSheet(); } return true;
       case 'card-del-yes': run(KStore.deleteCard(b.id, X.id), 'カードを消しました'); U.cardId = ''; closeSheet(); return true;
