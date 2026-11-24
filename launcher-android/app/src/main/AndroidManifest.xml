@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- すするアプリ（Android のランチャー）：すするanki・航海日誌・すする帳簿の Android アプリを開くだけのアプリ（ホーム画面のウィジェット付き） -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 3つのアプリが入っているか・アイコンを見る（Android 11 からは、ここに書いたアプリしか見えない） -->
+    <queries>
+        <package android:name="io.github.susuruchachi.susuruanki" />
+        <package android:name="io.github.susuruchachi.koukainisshi" />
+        <package android:name="io.github.susuruchachi.kashikari" />
+    </queries>
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
+        android:label="@string/appName"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode|density|fontScale">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- アイコンの長押し（shortcuts.xml）から：susurulauncher://open?app=… ・ susurulauncher://home -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="susurulauncher" />
+            </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- ホーム画面のウィジェット：3つのアプリのアイコンを並べて、押すとそのアプリが開く -->
+        <receiver android:name=".LauncherWidget" android:exported="false" android:label="@string/widgetName">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_launcher_info" />
+        </receiver>
+    </application>
+</manifest>

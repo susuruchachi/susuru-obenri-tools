@@ -176,7 +176,7 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onPause() { super.onPause(); CookieManager.getInstance().flush(); }
+    protected void onPause() { super.onPause(); LauncherInstaller.onPause(); CookieManager.getInstance().flush(); }
 
     @Override
     protected void onStart() { super.onStart(); ApkUpdater.onShown(this); }
@@ -185,6 +185,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        LauncherInstaller.maybeOffer(this); // ★【1.4.0】 すするアプリ（ランチャー）がまだなら、入れるか聞く
         if (InstallResultReceiver.askLater) { InstallResultReceiver.askLater = false; bg.execute(() -> ApkUpdater.install(getApplicationContext())); }
     }
     @Override

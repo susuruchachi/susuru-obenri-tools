@@ -1,0 +1,64 @@
+# すするアプリ（Android のランチャー：launcher-android/）の APK を作る
+# 作業ブランチでは launcher-android/ を変えて push したときに動く。手で動かすには、このファイルが main にも要る（Actions → launcher-apk → Run workflow）
+# 作った APK を apk/susuru-launcher.apk に置く。開くだけのアプリなので、作り直すのは launcher-android/ を変えたときだけ（versionCode を1つ上げる）
+# 署名鍵：貸し借り帳と同じ Secrets（KASHIKARI_KEYSTORE_B64・KASHIKARI_KEYSTORE_PASSWORD）。無いときは使い捨ての鍵
+#        （中にデータは無いので、鍵が変わって上から入らないときは、アンインストールして入れ直せばよい）
+name: launcher-apk
+
+on:
+  push:
+    branches: [claude/charming-hamilton-p4pm3a]
+    paths: ['launcher-android/**', '.github/workflows/launcher-apk.yml']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '作った APK を apk/susuru-launcher.apk に置く'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Use the preinstalled Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "sdk.dir=$SDK" > launcher-android/local.properties
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Prepare keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KASHIKARI_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"; echo "LAUNCHER_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"; else echo "署名鍵が無いので使い捨ての鍵で署名します"; fi
+      - name: Build APK
+        working-directory: launcher-android
+        env:
+          LAUNCHER_KEYSTORE_PASSWORD: ${{ secrets.KASHIKARI_KEYSTORE_PASSWORD }}
+        run: gradle --no-daemon assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: susuru-launcher-apk
+          path: launcher-android/app/build/outputs/apk/release/app-release.apk
+      - name: Publish APK to the branch
+        if: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          cp launcher-android/app/build/outputs/apk/release/app-release.apk apk/susuru-launcher.apk
+          CODE=$(sed -n 's/^ *versionCode \([0-9]*\).*/\1/p' launcher-android/app/build.gradle)
+          KEY=$([ -n "$LAUNCHER_KEYSTORE" ] && echo "いつもの鍵" || echo "使い捨ての鍵")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apk/susuru-launcher.apk
+          git commit -m "すするアプリ（Android のランチャー）の APK（versionCode $CODE・$KEY で署名）を置く" || echo "変更なし"
+          git pull --rebase origin "${GITHUB_REF_NAME}" && git push

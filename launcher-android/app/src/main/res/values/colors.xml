@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 航海日誌・貸し借り帳と同じ色（夜の海図の紺・真鍮・羊皮紙） -->
+<resources>
+    <color name="ink">#FF131E29</color>
+    <color name="panel">#FF1D2E3D</color>
+    <color name="brass">#FFE3C384</color>
+    <color name="parchment">#FFEDE6D2</color>
+    <color name="dim">#FF97A8B5</color>
+</resources>
